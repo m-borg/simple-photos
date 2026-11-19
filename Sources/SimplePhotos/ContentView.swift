@@ -227,6 +227,15 @@ public struct ContentView: View {
             }
 
             hudIconButton(
+                systemName: "magnifyingglass",
+                isActive: viewModel.isSearchingYandex,
+                isDisabled: viewModel.isSearchingYandex,
+                help: "Search Image in Yandex (Y)"
+            ) {
+                viewModel.searchCurrentImageInYandex()
+            }
+
+            hudIconButton(
                 systemName: "folder",
                 help: "Reveal in Finder (⇧⌘R)"
             ) {

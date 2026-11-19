@@ -446,6 +446,14 @@ public final class InteractiveCanvasNSView: NSView {
 
         menu.addItem(.separator())
 
+        let yandexItem = NSMenuItem(
+            title: "Search Image in Yandex",
+            action: #selector(ctxSearchYandex),
+            keyEquivalent: "y"
+        )
+        yandexItem.target = self
+        menu.addItem(yandexItem)
+
         let copyImg = NSMenuItem(title: "Copy Image", action: #selector(ctxCopyImage), keyEquivalent: "c")
         copyImg.target = self
         menu.addItem(copyImg)
@@ -495,6 +503,7 @@ public final class InteractiveCanvasNSView: NSView {
     @objc private func ctxFlip() { viewModel?.toggleFlipHorizontal() }
     @objc private func ctxToggleAutoBackground() { viewModel?.toggleAutoBackgroundColor() }
     @objc private func ctxToggleCheckerboard() { viewModel?.checkerboardBackground.toggle() }
+    @objc private func ctxSearchYandex() { viewModel?.searchCurrentImageInYandex() }
     @objc private func ctxCopyImage() { viewModel?.copyImageToClipboard() }
     @objc private func ctxCopyPath() { viewModel?.copyFilePathToClipboard() }
     @objc private func ctxReveal() { viewModel?.revealInFinder() }

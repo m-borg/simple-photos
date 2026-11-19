@@ -257,6 +257,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         autoBgItem.target = self
         imgMenu.addItem(autoBgItem)
 
+        let yandexItem = NSMenuItem(title: "Search Image in Yandex", action: #selector(menuSearchYandex), keyEquivalent: "y")
+        yandexItem.target = self
+        imgMenu.addItem(yandexItem)
+
         imgMenu.addItem(.separator())
 
         let fullScreenItem = NSMenuItem(title: "Toggle Fullscreen", action: #selector(menuToggleFullscreen), keyEquivalent: "f")
@@ -284,6 +288,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func menuRotateRight() { viewModel.rotateRight() }
     @objc private func menuFlipHorizontal() { viewModel.toggleFlipHorizontal() }
     @objc private func menuToggleAutoBackground() { viewModel.toggleAutoBackgroundColor() }
+    @objc private func menuSearchYandex() { viewModel.searchCurrentImageInYandex() }
     @objc private func menuSetDefaultViewer() { viewModel.setAsDefaultForAllImages() }
     @objc private func menuRestorePreviewViewer() { viewModel.restorePreviewAsDefaultForAllImages() }
     @objc private func menuToggleFullscreen() { viewModel.toggleFullScreen() }
@@ -432,6 +437,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             case "b":
                 viewModel.toggleAutoBackgroundColor()
                 return true
+            case "y":
+                if viewModel.hasImages {
+                    viewModel.searchCurrentImageInYandex()
+                    return true
+                }
             case "1":
                 if viewModel.hasImages {
                     viewModel.toggleActualSizeOrFit()
@@ -541,6 +551,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             case "b":
                 viewModel.toggleAutoBackgroundColor()
                 return true
+            case "y":
+                if viewModel.hasImages {
+                    viewModel.searchCurrentImageInYandex()
+                    return true
+                }
             case "g":
                 viewModel.checkerboardBackground.toggle()
                 return true

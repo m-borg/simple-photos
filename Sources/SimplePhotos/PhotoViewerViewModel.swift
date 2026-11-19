@@ -78,6 +78,7 @@ public final class PhotoViewerViewModel: ObservableObject {
     @Published public var isFullScreen: Bool = false
     @Published public private(set) var isDefaultImageViewer: Bool = false
     @Published public private(set) var isUpdatingDefaultViewer: Bool = false
+    @Published public private(set) var isSearchingYandex: Bool = false
     @Published public private(set) var detectedBackgroundColor: NSColor?
     @Published public var autoBackgroundColorEnabled: Bool = {
         if let stored = UserDefaults.standard.object(forKey: "autoBackgroundColorEnabled") as? Bool {
@@ -890,6 +891,23 @@ public final class PhotoViewerViewModel: ObservableObject {
         pb.setString(url.path, forType: .string)
         if !isFullScreen {
             showToast("Copied file path")
+        }
+    }
+
+    public func searchCurrentImageInYandex() {
+        guard let cgImage = currentCGImage, !isSearchingYandex else { return }
+        isSearchingYandex = true
+        showToast("Searching image in Yandex…")
+
+        Task {
+            do {
+                let searchURL = try await YandexImageSearch.searchImage(cgImage: cgImage)
+                self.isSearchingYandex = false
+                NSWorkspace.shared.open(searchURL)
+            } catch {
+                self.isSearchingYandex = false
+                self.showToast("Yandex search failed")
+            }
         }
     }
 

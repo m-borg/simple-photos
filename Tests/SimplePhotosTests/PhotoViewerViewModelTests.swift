@@ -257,4 +257,39 @@ final class PhotoViewerViewModelTests: XCTestCase {
         XCTAssertFalse(identifiers.contains("public.mpeg-4"))
         XCTAssertFalse(identifiers.contains("com.apple.quicktime-movie"))
     }
+
+    func testYandexImageSearchPreparationAndURLFormatting() throws {
+        let imgURL = try createTestPNG(named: "large_art.png", width: 2000, height: 1000)
+        let vm = PhotoViewerViewModel()
+        vm.open(urls: [imgURL])
+        vm.loadCurrentImageSynchronously()
+
+        guard let cgImage = vm.currentCGImage else {
+            XCTFail("Expected currentCGImage")
+            return
+        }
+
+        guard let jpegData = YandexImageSearch.prepareJPEGData(from: cgImage, maxDimension: 512) else {
+            XCTFail("Expected JPEG data to be encoded")
+            return
+        }
+        XCTAssertGreaterThan(jpegData.count, 100)
+
+        // Verify downscaled dimensions (2000x1000 -> 512x256)
+        guard let decodedRep = NSBitmapImageRep(data: jpegData) else {
+            XCTFail("Expected valid JPEG NSBitmapImageRep")
+            return
+        }
+        XCTAssertEqual(decodedRep.pixelsWide, 512)
+        XCTAssertEqual(decodedRep.pixelsHigh, 256)
+
+        let searchURL = YandexImageSearch.buildSearchURL(
+            uploadedImageURL: "https://avatars.mds.yandex.net/get-images-cbir/12345/orig",
+            zone: "com"
+        )
+        XCTAssertEqual(
+            searchURL?.absoluteString,
+            "https://yandex.com/images/search?rpt=imageview&url=https%3A%2F%2Favatars.mds.yandex.net%2Fget-images-cbir%2F12345%2Forig"
+        )
+    }
 }

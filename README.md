@@ -7,6 +7,7 @@ A lightweight, native macOS image viewer (`Swift` / `SwiftUI` + `AppKit`) that w
 - **Automatic Sibling Discovery (Windows Photo Viewer style)**: Open any single image file (from Finder, drag-and-drop, or `⌘O`) and Simple Photos automatically discovers all sibling photos in the same folder in Finder's natural sort order—just press **`←`** / **`→`** or click the left/right sides of the window to browse through the entire folder.
 - **Automatic Seamless Background Color (`B`)**: Samples the dominant border color of each image so letterbox/pillarbox bars blend seamlessly with the artwork's background color (green with green, white with white, etc.). Toggleable anytime via `B`, the bottom hover dock, or the menu bar.
 - **Invisible Left / Right Side Click Navigation**: Click anywhere on the left or right side of the window or screen (including the very edge of the screen) to step backward or forward through photos without visible button clutter.
+- **One-Click Yandex Reverse Image Search (`Y`)**: Downscales the current photo to 512px JPEG and uploads it directly to Yandex Image Search (`images-apphost/image-download`), opening the results in your browser.
 - **Distraction-Free Fullscreen**: Double-click the center of any image (or press `F`) to toggle Fullscreen with zero UI overlays—just the photo.
 - **Images & Animated GIFs / WebPs Only**: Fast neighbor pre-caching for instant photo switching, plus smooth playback of animated GIFs, animated WebPs, and APNGs (excluding video files).
 
