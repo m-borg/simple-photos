@@ -292,4 +292,70 @@ final class PhotoViewerViewModelTests: XCTestCase {
             "https://yandex.com/images/search?rpt=imageview&url=https%3A%2F%2Favatars.mds.yandex.net%2Fget-images-cbir%2F12345%2Forig"
         )
     }
+
+    func testPreviewStyleCropCreatesNewImageLeavingOriginalUntouched() throws {
+        let imgURL = try createTestPNG(named: "crop_test.png", width: 400, height: 200)
+        let vm = PhotoViewerViewModel()
+        vm.open(urls: [imgURL])
+        vm.loadCurrentImageSynchronously()
+
+        XCTAssertEqual(vm.currentCGImage?.width, 400)
+        XCTAssertEqual(vm.currentCGImage?.height, 200)
+        XCTAssertFalse(vm.canUndoEdit)
+
+        // Select middle 50% width x 50% height (200x100)
+        vm.normalizedSelectionRect = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        XCTAssertTrue(vm.hasActiveSelection)
+        XCTAssertEqual(vm.selectedPixelDimensionsText, "200 × 100")
+
+        vm.cropToSelection()
+        vm.loadCurrentImageSynchronously()
+
+        XCTAssertFalse(vm.hasActiveSelection)
+        XCTAssertTrue(vm.canUndoEdit)
+        XCTAssertEqual(vm.currentURL?.lastPathComponent, "crop_test_cropped.png")
+        XCTAssertEqual(vm.currentCGImage?.width, 200)
+        XCTAssertEqual(vm.currentCGImage?.height, 100)
+
+        // Verify the original file on disk was NOT modified (still 400x200)
+        let origData = try Data(contentsOf: imgURL)
+        let origRep = NSBitmapImageRep(data: origData)
+        XCTAssertEqual(origRep?.pixelsWide, 400)
+        XCTAssertEqual(origRep?.pixelsHigh, 200)
+
+        // Verify the new cropped file on disk is 200x100
+        let croppedURL = tempDir.appendingPathComponent("crop_test_cropped.png")
+        let croppedData = try Data(contentsOf: croppedURL)
+        let croppedRep = NSBitmapImageRep(data: croppedData)
+        XCTAssertEqual(croppedRep?.pixelsWide, 200)
+        XCTAssertEqual(croppedRep?.pixelsHigh, 100)
+
+        // Undo the crop (⌘Z) and verify we return to the untouched 400x200 original
+        vm.undoLastEdit()
+        vm.loadCurrentImageSynchronously()
+        XCTAssertFalse(vm.canUndoEdit)
+        XCTAssertEqual(vm.currentURL?.lastPathComponent, "crop_test.png")
+        XCTAssertEqual(vm.currentCGImage?.width, 400)
+        XCTAssertEqual(vm.currentCGImage?.height, 200)
+    }
+
+    func testShiftDragConstrainsSelectionToExactPixelSquare() throws {
+        // Rectangular 400x200 image displayed at 1:1 (imageRect = 400x200)
+        let imageRect = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let startNorm = CGPoint(x: 0.1, y: 0.1) // (40, 20) in view/pixel coords
+
+        // Drag to (180, 90) -> dx = 140, dy = 70. With Shift held, desiredSide = 140,
+        // clamped by available vertical space (200 - 20 = 180) -> 140x140 square!
+        let normSquare = InteractiveCanvasNSView.computeSelectionNormalizedRect(
+            from: startNorm,
+            currentViewPt: NSPoint(x: 180, y: 90),
+            imageRect: imageRect,
+            constrainToSquare: true
+        )
+
+        let pixelW = round(normSquare.width * 400.0)
+        let pixelH = round(normSquare.height * 200.0)
+        XCTAssertEqual(pixelW, 140, accuracy: 0.5)
+        XCTAssertEqual(pixelH, 140, accuracy: 0.5, "Shift-drag must produce a true 1:1 pixel square even on rectangular images")
+    }
 }

@@ -128,6 +128,24 @@ public struct ContentView: View {
                     .frame(width: 72)
 
                 if viewModel.hasImages {
+                    // Crop Icon (or drag directly on image; action buttons appear right below selection)
+                    WinBarIconButton(
+                        systemName: "crop",
+                        isActive: viewModel.isCropToolActive || viewModel.hasActiveSelection,
+                        help: "Crop"
+                    ) {
+                        viewModel.toggleCropMode()
+                    }
+
+                    if viewModel.canUndoEdit {
+                        WinBarIconButton(
+                            systemName: "arrow.uturn.backward",
+                            help: "Undo Crop"
+                        ) {
+                            viewModel.undoLastEdit()
+                        }
+                    }
+
                     // Rotate Right (matching Windows Photos rotate icon)
                     WinBarIconButton(
                         systemName: "rotate.right",

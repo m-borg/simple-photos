@@ -184,7 +184,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         mainMenu.addItem(editMenuItem)
         let editMenu = NSMenu(title: "Edit")
         editMenuItem.submenu = editMenu
-        let copyImgItem = NSMenuItem(title: "Copy Image", action: #selector(menuCopyImage), keyEquivalent: "c")
+
+        let undoItem = NSMenuItem(title: "Undo Crop", action: #selector(menuUndoEdit), keyEquivalent: "z")
+        undoItem.target = self
+        editMenu.addItem(undoItem)
+
+        editMenu.addItem(.separator())
+
+        let cropItem = NSMenuItem(title: "Crop", action: #selector(menuCropSelection), keyEquivalent: "k")
+        cropItem.target = self
+        editMenu.addItem(cropItem)
+
+        let copyImgItem = NSMenuItem(title: "Copy Image / Selection", action: #selector(menuCopyImage), keyEquivalent: "c")
         copyImgItem.target = self
         editMenu.addItem(copyImgItem)
 
@@ -275,6 +286,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func menuLoadSample() { SampleGalleryGenerator.openDemoGallery(in: viewModel) }
     @objc private func menuRevealInFinder() { viewModel.revealInFinder() }
     @objc private func menuMoveToTrash() { viewModel.moveCurrentImageToTrash() }
+    @objc private func menuUndoEdit() { viewModel.undoLastEdit() }
+    @objc private func menuCropSelection() { viewModel.toggleCropMode() }
     @objc private func menuCopyImage() { viewModel.copyImageToClipboard() }
     @objc private func menuCopyPath() { viewModel.copyFilePathToClipboard() }
     @objc private func menuPrevPhoto() { viewModel.previousImage() }
@@ -305,6 +318,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         if menuItem.action == #selector(menuRestorePreviewViewer) {
             return !viewModel.isUpdatingDefaultViewer
         }
+        if menuItem.action == #selector(menuUndoEdit) {
+            return viewModel.canUndoEdit
+        }
+        if menuItem.action == #selector(menuCropSelection) {
+            return viewModel.hasImages
+        }
         return true
     }
 
@@ -332,6 +351,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         guard viewModel.hasImages,
               viewModel.canNavigate,
               viewModel.zoomScale <= 1.01,
+              !viewModel.hasActiveSelection,
+              !viewModel.isCropToolActive,
               !viewModel.showMetadataPopover,
               let window = mainWindow else {
             return false
@@ -357,11 +378,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             }
         }
 
-        // In Fullscreen, handle the entire left/right click zone directly here (including 0px / maxX screen edges).
-        // In Windowed mode, intercept clicks near the left/right window border (<= 16px from edge)
-        // where NSWindow's resize frame would otherwise swallow the click.
-        let isNearWindowEdge = loc.x <= 16 || loc.x >= (winSize.width - 16)
-        guard viewModel.isFullScreen || isNearWindowEdge else {
+        // Only intercept clicks right near the outer left/right border (<= 24px from edge)
+        // where NSWindow's resize frame or fullscreen screen boundary would otherwise swallow the click.
+        // Clicks further inside go to InteractiveCanvasNSView so dragging on the photo draws a selection box!
+        let isNearWindowEdge = loc.x <= 24 || loc.x >= (winSize.width - 24)
+        guard isNearWindowEdge else {
             return false
         }
 
@@ -403,6 +424,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             case "o":
                 viewModel.presentOpenPanel()
                 return true
+            case "z":
+                if viewModel.canUndoEdit {
+                    viewModel.undoLastEdit()
+                    return true
+                }
+            case "k":
+                if viewModel.hasImages {
+                    viewModel.toggleCropMode()
+                    return true
+                }
             case "c":
                 if viewModel.hasImages {
                     if isShift {
@@ -487,6 +518,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         case 119: // End
             viewModel.lastImage()
             return true
+        case 36, 76: // Return / Enter
+            if viewModel.hasActiveSelection {
+                viewModel.cropToSelection()
+                return true
+            }
         case 49: // Space
             if isNoModifier {
                 viewModel.toggleSlideshow()
@@ -494,10 +530,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             }
         case 51, 117: // Delete / Backspace / Forward Delete
             if isNoModifier {
-                viewModel.moveCurrentImageToTrash()
+                if viewModel.hasActiveSelection {
+                    viewModel.clearSelection()
+                } else {
+                    viewModel.moveCurrentImageToTrash()
+                }
                 return true
             }
         case 53: // Escape
+            if viewModel.hasActiveSelection || viewModel.isCropToolActive {
+                viewModel.clearSelection()
+                return true
+            }
             if viewModel.isSlideshowActive {
                 viewModel.stopSlideshow()
                 return true

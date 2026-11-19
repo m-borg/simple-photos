@@ -107,8 +107,14 @@ public final class PhotoViewerViewModel: ObservableObject {
     }
     @Published public var checkerboardBackground: Bool = false
 
-    // Tracks per-URL session rotation so navigating back and forth remembers orientation
+    // Selection & Crop State (Normalized 0...1 in displayed image coordinates, origin bottom-left)
+    @Published public var normalizedSelectionRect: CGRect? = nil
+    @Published public var isCropToolActive: Bool = false
+    @Published public private(set) var canUndoEdit: Bool = false
+
+    // Tracks per-URL session rotation and created crop files for undo
     private var sessionRotations: [URL: Int] = [:]
+    private var createdCropURLsStack: [(createdURL: URL, originalURL: URL)] = []
     private let photoCache = NSCache<NSURL, CachedPhotoEntry>()
     private var slideshowTimer: Timer?
     private var animTimer: Timer?
@@ -361,11 +367,14 @@ public final class PhotoViewerViewModel: ObservableObject {
         currentIndex = clampedIndex
         let url = imageURLs[clampedIndex]
 
-        // Reset zoom & pan on image change, restore any session rotation for this URL
+        // Reset zoom, pan & selection on image change, restore any session rotation for this URL
         zoomScale = 1.0
         panOffset = .zero
         isFlippedHorizontally = false
+        normalizedSelectionRect = nil
+        isCropToolActive = false
         rotationDegrees = sessionRotations[url] ?? 0
+        canUndoEdit = !createdCropURLsStack.isEmpty
 
         loadImage(for: url)
         preloadNeighbors(around: clampedIndex)
@@ -885,13 +894,290 @@ public final class PhotoViewerViewModel: ObservableObject {
     }
 
     public func copyImageToClipboard() {
+        if let cgImage = currentCGImage, normalizedSelectionRect != nil {
+            let oriented = Self.createOrientedCGImage(
+                from: cgImage,
+                rotationDegrees: rotationDegrees,
+                isFlippedHorizontally: isFlippedHorizontally
+            )
+            if let pixelRect = selectedPixelRect(for: oriented),
+               let croppedCG = Self.renderStandaloneCroppedCGImage(from: oriented, pixelRect: pixelRect) {
+                let nsImg = NSImage(cgImage: croppedCG, size: NSSize(width: croppedCG.width, height: croppedCG.height))
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.writeObjects([nsImg])
+                clearSelection()
+                showToast("Copied selection")
+                return
+            }
+        }
+
         guard let image = currentImage else { return }
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([image])
         if !isFullScreen {
-            showToast("Copied image to Clipboard")
+            showToast("Copied image")
         }
+    }
+
+    // MARK: - Selection, Crop, Cut & Undo (Preview-style)
+
+    public var hasActiveSelection: Bool {
+        guard let rect = normalizedSelectionRect else { return false }
+        return rect.width > 0.005 && rect.height > 0.005
+    }
+
+    public var selectedPixelDimensionsText: String {
+        guard let cgImage = currentCGImage, hasActiveSelection else { return "" }
+        let rotSwap = (rotationDegrees % 180) != 0
+        let w = CGFloat(rotSwap ? cgImage.height : cgImage.width)
+        let h = CGFloat(rotSwap ? cgImage.width : cgImage.height)
+        guard let norm = normalizedSelectionRect else { return "" }
+        let pw = max(1, Int(round(norm.width * w)))
+        let ph = max(1, Int(round(norm.height * h)))
+        return "\(pw) × \(ph)"
+    }
+
+    public func toggleCropMode() {
+        guard hasImages else { return }
+        if hasActiveSelection {
+            cropToSelection()
+        } else {
+            isCropToolActive.toggle()
+            if !isCropToolActive {
+                normalizedSelectionRect = nil
+            }
+        }
+    }
+
+    public func clearSelection() {
+        normalizedSelectionRect = nil
+        isCropToolActive = false
+    }
+
+    public func selectedPixelRect(for cgImage: CGImage) -> CGRect? {
+        guard let norm = normalizedSelectionRect, norm.width > 0.005, norm.height > 0.005 else {
+            return nil
+        }
+        let w = CGFloat(cgImage.width)
+        let h = CGFloat(cgImage.height)
+        let minX = max(0.0, min(1.0, norm.minX))
+        let maxX = max(0.0, min(1.0, norm.maxX))
+        let minY = max(0.0, min(1.0, norm.minY))
+        let maxY = max(0.0, min(1.0, norm.maxY))
+
+        let px = floor(minX * w)
+        let py = floor((1.0 - maxY) * h)
+        let pw = max(1.0, round((maxX - minX) * w))
+        let ph = max(1.0, round((maxY - minY) * h))
+
+        let bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        let rect = CGRect(x: px, y: py, width: pw, height: ph).intersection(bounds)
+        guard rect.width >= 1, rect.height >= 1 else { return nil }
+        return rect
+    }
+
+    /// Renders the cropped rectangle into a brand-new standalone CGContext buffer so no reference
+    /// to the original uncropped parent buffer or embedded metadata remains.
+    nonisolated public static func renderStandaloneCroppedCGImage(
+        from oriented: CGImage,
+        pixelRect: CGRect
+    ) -> CGImage? {
+        guard let subImage = oriented.cropping(to: pixelRect) else {
+            return nil
+        }
+        let w = subImage.width
+        let h = subImage.height
+        guard w >= 1, h >= 1,
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: nil,
+                  width: w,
+                  height: h,
+                  bitsPerComponent: 8,
+                  bytesPerRow: w * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return subImage
+        }
+        ctx.interpolationQuality = .high
+        ctx.draw(subImage, in: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage() ?? subImage
+    }
+
+    /// Always saves the cropped selection as a new image file alongside the untouched original.
+    public func cropToSelection() {
+        guard let originalURL = currentURL,
+              let cgImage = currentCGImage,
+              hasActiveSelection else {
+            return
+        }
+
+        let oriented = Self.createOrientedCGImage(
+            from: cgImage,
+            rotationDegrees: rotationDegrees,
+            isFlippedHorizontally: isFlippedHorizontally
+        )
+        guard let pixelRect = selectedPixelRect(for: oriented),
+              let croppedCG = Self.renderStandaloneCroppedCGImage(from: oriented, pixelRect: pixelRect) else {
+            showToast("Selection too small to crop")
+            return
+        }
+
+        guard let newURL = saveAsNewImageFile(croppedCG, basedOn: originalURL, suffix: "cropped") else {
+            showToast("Could not save cropped image")
+            return
+        }
+
+        createdCropURLsStack.append((createdURL: newURL, originalURL: originalURL))
+        canUndoEdit = true
+        normalizedSelectionRect = nil
+        isCropToolActive = false
+
+        // Refresh sibling list in folder and switch to the newly created cropped image
+        let parentDir = newURL.deletingLastPathComponent()
+        let updatedSiblings = Self.scanImagesInDirectory(parentDir).map { $0.standardizedFileURL }
+        if !updatedSiblings.isEmpty {
+            imageURLs = updatedSiblings
+        } else {
+            imageURLs.insert(newURL, at: min(currentIndex + 1, imageURLs.count))
+        }
+
+        if let newIdx = imageURLs.firstIndex(where: { $0.path == newURL.path }) {
+            selectImage(at: newIdx, forceReload: true)
+        } else {
+            loadCurrentImageSynchronously()
+        }
+
+        showToast("Saved “\(newURL.lastPathComponent)”")
+    }
+
+    public func undoLastEdit() {
+        guard let lastEntry = createdCropURLsStack.popLast() else {
+            return
+        }
+        canUndoEdit = !createdCropURLsStack.isEmpty
+
+        let createdURL = lastEntry.createdURL
+        let originalURL = lastEntry.originalURL
+
+        try? FileManager.default.trashItem(at: createdURL, resultingItemURL: nil)
+        photoCache.removeObject(forKey: createdURL as NSURL)
+
+        let parentDir = originalURL.deletingLastPathComponent()
+        let updatedSiblings = Self.scanImagesInDirectory(parentDir).map { $0.standardizedFileURL }
+        if !updatedSiblings.isEmpty {
+            imageURLs = updatedSiblings
+        } else {
+            imageURLs.removeAll { $0.path == createdURL.path }
+        }
+
+        if let origIdx = imageURLs.firstIndex(where: { $0.path == originalURL.path }) {
+            selectImage(at: origIdx, forceReload: true)
+        } else if !imageURLs.isEmpty {
+            selectImage(at: min(currentIndex, imageURLs.count - 1), forceReload: true)
+        }
+
+        showToast("Undid crop (removed “\(createdURL.lastPathComponent)”)")
+    }
+
+    /// Writes `newCGImage` to a brand-new unique file alongside `originalURL`, leaving `originalURL` untouched.
+    private func saveAsNewImageFile(_ newCGImage: CGImage, basedOn originalURL: URL, suffix: String) -> URL? {
+        let origExt = originalURL.pathExtension.lowercased()
+        let targetExt: String
+        let utTypeIdentifier: CFString
+
+        switch origExt {
+        case "jpg", "jpeg", "jpe":
+            targetExt = origExt
+            utTypeIdentifier = UTType.jpeg.identifier as CFString
+        case "png":
+            targetExt = "png"
+            utTypeIdentifier = UTType.png.identifier as CFString
+        case "heic", "heif":
+            targetExt = origExt
+            utTypeIdentifier = UTType.heic.identifier as CFString
+        case "tiff", "tif":
+            targetExt = origExt
+            utTypeIdentifier = UTType.tiff.identifier as CFString
+        case "bmp":
+            targetExt = "bmp"
+            utTypeIdentifier = UTType.bmp.identifier as CFString
+        default:
+            // Formats like WebP that macOS CGImageDestination doesn't write natively are saved cleanly as .png
+            targetExt = "png"
+            utTypeIdentifier = UTType.png.identifier as CFString
+        }
+
+        let parentDir = originalURL.deletingLastPathComponent()
+        let baseName = originalURL.deletingPathExtension().lastPathComponent
+        let fm = FileManager.default
+
+        var candidateURL = parentDir.appendingPathComponent("\(baseName)_\(suffix).\(targetExt)")
+        var counter = 2
+        while fm.fileExists(atPath: candidateURL.path) {
+            candidateURL = parentDir.appendingPathComponent("\(baseName)_\(suffix)_\(counter).\(targetExt)")
+            counter += 1
+        }
+
+        guard let dest = CGImageDestinationCreateWithURL(candidateURL as CFURL, utTypeIdentifier, 1, nil) else {
+            return nil
+        }
+
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.95
+        ]
+        CGImageDestinationAddImage(dest, newCGImage, props as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else {
+            return nil
+        }
+
+        // Notify Finder that the directory contents changed so it generates a fresh thumbnail immediately
+        NSWorkspace.shared.noteFileSystemChanged(parentDir.path)
+        return candidateURL.standardizedFileURL
+    }
+
+    nonisolated public static func createOrientedCGImage(
+        from cgImage: CGImage,
+        rotationDegrees: Int,
+        isFlippedHorizontally: Bool
+    ) -> CGImage {
+        let normRot = ((rotationDegrees % 360) + 360) % 360
+        if normRot == 0 && !isFlippedHorizontally {
+            return cgImage
+        }
+
+        let origW = CGFloat(cgImage.width)
+        let origH = CGFloat(cgImage.height)
+        let rotSwap = (normRot % 180) != 0
+        let targetW = Int(rotSwap ? origH : origW)
+        let targetH = Int(rotSwap ? origW : origH)
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: nil,
+                  width: targetW,
+                  height: targetH,
+                  bitsPerComponent: 8,
+                  bytesPerRow: targetW * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return cgImage
+        }
+
+        ctx.translateBy(x: CGFloat(targetW) * 0.5, y: CGFloat(targetH) * 0.5)
+        if normRot != 0 {
+            let radians = -CGFloat(normRot) * .pi / 180.0
+            ctx.rotate(by: radians)
+        }
+        if isFlippedHorizontally {
+            ctx.scaleBy(x: -1.0, y: 1.0)
+        }
+        ctx.draw(cgImage, in: CGRect(x: -origW * 0.5, y: -origH * 0.5, width: origW, height: origH))
+        return ctx.makeImage() ?? cgImage
     }
 
     public func copyFilePathToClipboard() {
