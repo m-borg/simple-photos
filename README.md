@@ -23,11 +23,13 @@ To install into `/Applications`:
 cp -R SimplePhotos.app /Applications/
 ```
 
-## Setting as Default Photo Viewer in Finder
+## Setting as Default Photo Viewer (or Restoring macOS Preview)
 
-1. Right-click any image (`.jpg`, `.png`, `.webp`, `.heic`, `.gif`, etc.) in Finder and click **Get Info** (`⌘I`).
-2. Under **Open with:**, choose **Simple Photos.app**.
-3. Click **Change All…** to open all images of that type with Simple Photos by default.
+You can set Simple Photos as your default viewer for all image types (or switch back to macOS Preview anytime) with one click directly inside the app:
+
+- **Menu Bar**: Click **Simple Photos** → **Set as Default for All Images** (or **Restore Preview as Default Viewer**).
+- **Info & Options (`I`)**: Click the **`(i)`** button on the bottom hover bar and use the **Set Simple Photos** / **Restore Preview** buttons.
+- **Right-Click Menu / Welcome Screen**: Also available in the right-click context menu and on the welcome screen.
 
 ## Keyboard & Mouse Shortcuts
 

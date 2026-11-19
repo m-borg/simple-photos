@@ -135,6 +135,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         let prefAutoBg = NSMenuItem(title: "Automatic Background Color", action: #selector(menuToggleAutoBackground), keyEquivalent: ",")
         prefAutoBg.target = self
         appMenu.addItem(prefAutoBg)
+
+        let setDefItem = NSMenuItem(title: "Set as Default for All Images", action: #selector(menuSetDefaultViewer), keyEquivalent: "")
+        setDefItem.target = self
+        appMenu.addItem(setDefItem)
+
+        let restorePrevItem = NSMenuItem(title: "Restore Preview as Default Viewer", action: #selector(menuRestorePreviewViewer), keyEquivalent: "")
+        restorePrevItem.target = self
+        appMenu.addItem(restorePrevItem)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Simple Photos", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthers = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -276,12 +284,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func menuRotateRight() { viewModel.rotateRight() }
     @objc private func menuFlipHorizontal() { viewModel.toggleFlipHorizontal() }
     @objc private func menuToggleAutoBackground() { viewModel.toggleAutoBackgroundColor() }
+    @objc private func menuSetDefaultViewer() { viewModel.setAsDefaultForAllImages() }
+    @objc private func menuRestorePreviewViewer() { viewModel.restorePreviewAsDefaultForAllImages() }
     @objc private func menuToggleFullscreen() { viewModel.toggleFullScreen() }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(menuToggleAutoBackground) {
             menuItem.state = viewModel.autoBackgroundColorEnabled ? .on : .off
             return true
+        }
+        if menuItem.action == #selector(menuSetDefaultViewer) {
+            menuItem.state = viewModel.isDefaultImageViewer ? .on : .off
+            return !viewModel.isUpdatingDefaultViewer
+        }
+        if menuItem.action == #selector(menuRestorePreviewViewer) {
+            return !viewModel.isUpdatingDefaultViewer
         }
         return true
     }

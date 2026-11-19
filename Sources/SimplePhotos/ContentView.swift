@@ -342,6 +342,44 @@ public struct ContentView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("Default Image Viewer")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if viewModel.isDefaultImageViewer {
+                        Label("Simple Photos", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("macOS Preview / Other")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        viewModel.setAsDefaultForAllImages()
+                    } label: {
+                        Text("Set Simple Photos")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(viewModel.isUpdatingDefaultViewer)
+
+                    Button {
+                        viewModel.restorePreviewAsDefaultForAllImages()
+                    } label: {
+                        Text("Restore Preview")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(viewModel.isUpdatingDefaultViewer)
+                }
+            }
+
             Divider()
 
             HStack(spacing: 8) {
@@ -446,6 +484,47 @@ public struct ContentView: View {
                     )
                 }
                 .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    viewModel.setAsDefaultForAllImages()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: viewModel.isDefaultImageViewer ? "checkmark.circle.fill" : "photo.badge.checkmark")
+                            .foregroundStyle(viewModel.isDefaultImageViewer ? .green : .white.opacity(0.85))
+                        Text(viewModel.isDefaultImageViewer ? "Default for All Images (Active)" : "Set as Default for All Images")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isUpdatingDefaultViewer)
+
+                Button {
+                    viewModel.restorePreviewAsDefaultForAllImages()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                        Text("Restore Preview as Default")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.05), in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 0.8)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isUpdatingDefaultViewer)
             }
 
             HStack(spacing: 14) {

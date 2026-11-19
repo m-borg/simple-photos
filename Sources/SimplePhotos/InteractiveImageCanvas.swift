@@ -460,6 +460,25 @@ public final class InteractiveCanvasNSView: NSView {
 
         menu.addItem(.separator())
 
+        let setDefItem = NSMenuItem(
+            title: "Set as Default for All Images",
+            action: #selector(ctxSetDefaultViewer),
+            keyEquivalent: ""
+        )
+        setDefItem.state = vm.isDefaultImageViewer ? .on : .off
+        setDefItem.target = self
+        menu.addItem(setDefItem)
+
+        let restorePrevItem = NSMenuItem(
+            title: "Restore Preview as Default Viewer",
+            action: #selector(ctxRestorePreviewViewer),
+            keyEquivalent: ""
+        )
+        restorePrevItem.target = self
+        menu.addItem(restorePrevItem)
+
+        menu.addItem(.separator())
+
         let trash = NSMenuItem(title: "Move to Trash", action: #selector(ctxTrash), keyEquivalent: "\u{08}")
         trash.target = self
         menu.addItem(trash)
@@ -479,6 +498,8 @@ public final class InteractiveCanvasNSView: NSView {
     @objc private func ctxCopyImage() { viewModel?.copyImageToClipboard() }
     @objc private func ctxCopyPath() { viewModel?.copyFilePathToClipboard() }
     @objc private func ctxReveal() { viewModel?.revealInFinder() }
+    @objc private func ctxSetDefaultViewer() { viewModel?.setAsDefaultForAllImages() }
+    @objc private func ctxRestorePreviewViewer() { viewModel?.restorePreviewAsDefaultForAllImages() }
     @objc private func ctxTrash() { viewModel?.moveCurrentImageToTrash() }
 
     // MARK: - Drag and Drop

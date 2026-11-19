@@ -245,4 +245,16 @@ final class PhotoViewerViewModelTests: XCTestCase {
         XCTAssertEqual(pillarboxColor.greenComponent, 211.0 / 255.0, accuracy: 0.03)
         XCTAssertEqual(pillarboxColor.blueComponent, 200.0 / 255.0, accuracy: 0.03)
     }
+
+    func testDefaultAppManagerSupportedUTTypesExcludesVideos() throws {
+        let types = DefaultAppManager.allSupportedImageUTTypes()
+        let identifiers = Set(types.map(\.identifier))
+
+        XCTAssertTrue(identifiers.contains("public.jpeg"))
+        XCTAssertTrue(identifiers.contains("public.png"))
+        XCTAssertTrue(identifiers.contains("com.compuserve.gif"))
+        XCTAssertTrue(identifiers.contains("org.webmproject.webp"))
+        XCTAssertFalse(identifiers.contains("public.mpeg-4"))
+        XCTAssertFalse(identifiers.contains("com.apple.quicktime-movie"))
+    }
 }

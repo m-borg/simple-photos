@@ -76,6 +76,8 @@ public final class PhotoViewerViewModel: ObservableObject {
     @Published public private(set) var isLoading: Bool = false
     @Published public var statusToast: String?
     @Published public var isFullScreen: Bool = false
+    @Published public private(set) var isDefaultImageViewer: Bool = false
+    @Published public private(set) var isUpdatingDefaultViewer: Bool = false
     @Published public private(set) var detectedBackgroundColor: NSColor?
     @Published public var autoBackgroundColorEnabled: Bool = {
         if let stored = UserDefaults.standard.object(forKey: "autoBackgroundColorEnabled") as? Bool {
@@ -118,6 +120,33 @@ public final class PhotoViewerViewModel: ObservableObject {
 
     public init() {
         photoCache.countLimit = 24
+        isDefaultImageViewer = DefaultAppManager.isSimplePhotosCurrentlyDefault()
+    }
+
+    public func refreshDefaultViewerStatus() {
+        isDefaultImageViewer = DefaultAppManager.isSimplePhotosCurrentlyDefault()
+    }
+
+    public func setAsDefaultForAllImages() {
+        guard !isUpdatingDefaultViewer else { return }
+        isUpdatingDefaultViewer = true
+        Task {
+            _ = await DefaultAppManager.setSimplePhotosAsDefault()
+            self.isDefaultImageViewer = DefaultAppManager.isSimplePhotosCurrentlyDefault()
+            self.isUpdatingDefaultViewer = false
+            self.showToast("Simple Photos set as default for all images")
+        }
+    }
+
+    public func restorePreviewAsDefaultForAllImages() {
+        guard !isUpdatingDefaultViewer else { return }
+        isUpdatingDefaultViewer = true
+        Task {
+            _ = await DefaultAppManager.restorePreviewAsDefault()
+            self.isDefaultImageViewer = DefaultAppManager.isSimplePhotosCurrentlyDefault()
+            self.isUpdatingDefaultViewer = false
+            self.showToast("Restored macOS Preview as default image viewer")
+        }
     }
 
     // MARK: - Computed Properties
