@@ -1,6 +1,6 @@
 # Simple Photos for macOS
 
-A lightweight, native macOS image viewer (`Swift` / `SwiftUI` + `AppKit`) that works like **Windows Photo Viewer** with an **ultra-minimal borderless interface**, automatic edge-matched background color, and zero-distraction fullscreen.
+A lightweight, native macOS image viewer (`Swift` / `SwiftUI` + `AppKit`) modeled directly after **Windows 11 Photos**—with a dedicated top header bar, bottom status & zoom bar, `#202020` dark grey canvas, automatic folder sibling discovery, optional edge-matched background color, and zero-distraction fullscreen.
 
 ## Features
 

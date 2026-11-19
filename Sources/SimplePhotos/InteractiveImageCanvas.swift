@@ -232,12 +232,8 @@ public final class InteractiveCanvasNSView: NSView {
         guard w > 100, h > 60 else { return .center }
 
         if !isFullScreen {
-            // Avoid top-left traffic lights area in windowed mode (in unflipped coords, top is near h)
+            // Avoid top-left traffic lights area if window-level coordinates are passed
             if point.x < 92 && point.y > (h - 44) {
-                return .center
-            }
-            // Avoid bottom-center floating dock pill area in windowed mode
-            if abs(point.x - w * 0.5) < 160 && point.y < 64 {
                 return .center
             }
         }

@@ -57,7 +57,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.title = "Simple Photos"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.06, alpha: 1.0)
+        window.backgroundColor = NSColor(calibratedRed: 32.0 / 255.0, green: 32.0 / 255.0, blue: 32.0 / 255.0, alpha: 1.0)
         window.isOpaque = true
         window.hasShadow = true
         window.toolbar = nil
@@ -348,6 +348,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
             loc = window.convertPoint(fromScreen: NSEvent.mouseLocation)
         } else {
             return false
+        }
+
+        // In Windowed mode, do not intercept clicks inside the dedicated 42pt top bar or 34pt bottom bar
+        if !viewModel.isFullScreen {
+            if loc.y < 36 || loc.y > (winSize.height - 44) {
+                return false
+            }
         }
 
         // In Fullscreen, handle the entire left/right click zone directly here (including 0px / maxX screen edges).

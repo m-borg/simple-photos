@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 public struct ImageMetadata: Equatable, Sendable {
     public var filename: String = ""
     public var filePath: String = ""
+    public var fileExtensionBadge: String = ""
     public var pixelWidth: Int = 0
     public var pixelHeight: Int = 0
     public var fileSizeFormatted: String = ""
@@ -81,13 +82,13 @@ public final class PhotoViewerViewModel: ObservableObject {
     @Published public private(set) var isSearchingYandex: Bool = false
     @Published public private(set) var detectedBackgroundColor: NSColor?
     @Published public var autoBackgroundColorEnabled: Bool = {
-        if let stored = UserDefaults.standard.object(forKey: "autoBackgroundColorEnabled") as? Bool {
+        if let stored = UserDefaults.standard.object(forKey: "automaticBackgroundEnabled_v2") as? Bool {
             return stored
         }
-        return true
+        return false
     }() {
         didSet {
-            UserDefaults.standard.set(autoBackgroundColorEnabled, forKey: "autoBackgroundColorEnabled")
+            UserDefaults.standard.set(autoBackgroundColorEnabled, forKey: "automaticBackgroundEnabled_v2")
         }
     }
 
@@ -175,6 +176,13 @@ public final class PhotoViewerViewModel: ObservableObject {
             return "Fit"
         }
         let pct = Int(round(zoomScale * 100.0))
+        return "\(pct)%"
+    }
+
+    /// Actual display percentage relative to 1:1 native image pixels (matching Windows 11 Photos bottom bar, e.g. "65%" or "259%")
+    public var displayZoomPercentageText: String {
+        let base = fitBaseScale > 0 ? fitBaseScale : 1.0
+        let pct = max(1, Int(round(base * zoomScale * 100.0)))
         return "\(pct)%"
     }
 
@@ -680,7 +688,9 @@ public final class PhotoViewerViewModel: ObservableObject {
         var meta = ImageMetadata()
         meta.filename = url.lastPathComponent
         meta.filePath = url.path
-        meta.formatName = url.pathExtension.uppercased()
+        let extUpper = url.pathExtension.uppercased()
+        meta.fileExtensionBadge = extUpper == "JPEG" ? "JPG" : extUpper
+        meta.formatName = extUpper
 
         if let cg = fallbackCGImage {
             meta.pixelWidth = cg.width

@@ -4,11 +4,13 @@ import UniformTypeIdentifiers
 
 public struct ContentView: View {
     @ObservedObject var viewModel: PhotoViewerViewModel
-
-    @State private var isHUDVisible: Bool = false
-    @State private var isHoveringHUDControl: Bool = false
     @State private var isDropTargeted: Bool = false
-    @State private var hideTimerWorkItem: DispatchWorkItem?
+
+    // Exact Windows 11 Photos dark grey colors sampled from reference screenshots
+    private static let windowsCanvasGrey = Color(red: 32.0 / 255.0, green: 32.0 / 255.0, blue: 32.0 / 255.0) // #202020
+    private static let windowsTopBarGrey = Color(red: 32.0 / 255.0, green: 32.0 / 255.0, blue: 32.0 / 255.0) // #202020
+    private static let windowsBottomBarGrey = Color(red: 39.0 / 255.0, green: 39.0 / 255.0, blue: 39.0 / 255.0) // #272727
+    private static let windowsButtonBgGrey = Color(red: 46.0 / 255.0, green: 46.0 / 255.0, blue: 46.0 / 255.0) // #2E2E2E
 
     public init(viewModel: PhotoViewerViewModel) {
         self.viewModel = viewModel
@@ -16,287 +18,448 @@ public struct ContentView: View {
 
     public var body: some View {
         ZStack {
-            // Background Canvas (Pure black in fullscreen, near-black in windowed, or optional checkerboard)
-            backgroundLayer
-                .ignoresSafeArea()
+            VStack(spacing: 0) {
+                // 1. Dedicated Top Bar (Windowed mode only — never overlaps the photo)
+                if !viewModel.isFullScreen {
+                    windowsTopBar
+                }
 
-            if viewModel.hasImages {
-                InteractiveImageCanvas(
-                    viewModel: viewModel,
-                    onUserActivity: {
-                        registerUserActivity()
+                // 2. Main Photo Canvas Area (Strictly between top bar and bottom bar)
+                ZStack {
+                    canvasBackgroundLayer
+
+                    if viewModel.hasImages {
+                        InteractiveImageCanvas(
+                            viewModel: viewModel,
+                            onUserActivity: {}
+                        )
+                    } else {
+                        emptyWelcomeState
                     }
-                )
-                .ignoresSafeArea()
-            } else {
-                emptyWelcomeState
-            }
 
-            // Drop highlight border
+                    // Subtle Toast Notification (Windowed mode only)
+                    if !viewModel.isFullScreen, let toast = viewModel.statusToast {
+                        VStack {
+                            Text(toast)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.95))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(Self.windowsBottomBarGrey)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                                )
+                                .shadow(color: .black.opacity(0.45), radius: 8, y: 3)
+                                .padding(.top, 12)
+                            Spacer()
+                        }
+                        .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // 3. Dedicated Bottom Status & Zoom Bar (Windowed mode only — never overlaps the photo)
+                if !viewModel.isFullScreen && viewModel.hasImages {
+                    windowsBottomBar
+                }
+            }
+            .ignoresSafeArea()
+
+            // Drag & Drop Highlight Border
             if isDropTargeted && !viewModel.isFullScreen {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.85), lineWidth: 3)
-                    .background(Color.accentColor.opacity(0.08))
-                    .padding(6)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.85), lineWidth: 2.5)
+                    .background(Color.accentColor.opacity(0.06))
+                    .padding(4)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
             }
-
-            // Floating Status Toast (Windowed mode only — never in Fullscreen)
-            if !viewModel.isFullScreen, let toast = viewModel.statusToast {
-                VStack {
-                    Text(toast)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(
-                            Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8)
-                        )
-                        .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
-                        .padding(.top, 48)
-                    Spacer()
-                }
-                .transition(.opacity)
-                .allowsHitTesting(false)
-                .zIndex(20)
-            }
-
-            // Ultra-Minimal Floating HUD (Windowed mode ONLY — completely hidden in Fullscreen!)
-            if viewModel.hasImages && !viewModel.isFullScreen {
-                windowedFloatingHUD
-                    .opacity(effectiveHUDVisibility ? 1.0 : 0.0)
-                    .animation(.easeInOut(duration: 0.18), value: effectiveHUDVisibility)
-            }
         }
-        .frame(minWidth: 520, minHeight: 360)
-        .onHover { hoveringWindow in
-            if hoveringWindow {
-                registerUserActivity()
-            } else if !viewModel.showMetadataPopover {
-                setHUDVisible(false)
-            }
-        }
+        .frame(minWidth: 560, minHeight: 380)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers: providers)
         }
-        .onChange(of: viewModel.showMetadataPopover) { _, isShowing in
-            if isShowing {
-                setHUDVisible(true)
-            } else {
-                scheduleHUDHide()
-            }
-        }
-        .onChange(of: viewModel.isFullScreen) { _, fullScreen in
-            if fullScreen {
-                hideTimerWorkItem?.cancel()
-                isHoveringHUDControl = false
-                isHUDVisible = false
-            }
-        }
         .onAppear {
-            updateWindowTrafficLights(visible: !viewModel.hasImages)
+            ensureTrafficLightsVisible()
         }
     }
 
-    private var effectiveHUDVisibility: Bool {
-        guard !viewModel.isFullScreen else { return false }
-        return isHUDVisible || isHoveringHUDControl || viewModel.showMetadataPopover || !viewModel.hasImages
-    }
-
-    // MARK: - Background Layer
+    // MARK: - Canvas Background Layer
 
     @ViewBuilder
-    private var backgroundLayer: some View {
+    private var canvasBackgroundLayer: some View {
         if viewModel.checkerboardBackground && viewModel.hasImages && !viewModel.isFullScreen {
             CheckerboardBackgroundView()
         } else if viewModel.autoBackgroundColorEnabled && viewModel.hasImages,
                   let bgColor = viewModel.detectedBackgroundColor {
             Color(nsColor: bgColor)
-        } else if viewModel.isFullScreen {
-            Color.black
         } else {
-            Color(red: 0.04, green: 0.04, blue: 0.045)
+            Self.windowsCanvasGrey
         }
     }
 
-    // MARK: - Clean Windowed Floating HUD (Zero clutter, zero duplicate controls)
+    // MARK: - Windows 11 Photos Top Toolbar
 
-    private var windowedFloatingHUD: some View {
-        VStack {
-            // Subtle Top Pill: Filename & Index only
-            HStack {
-                Spacer(minLength: 72)
-                topCompactInfoPill
-                    .allowsHitTesting(effectiveHUDVisibility)
-                Spacer(minLength: 72)
+    private var windowsTopBar: some View {
+        ZStack {
+            // Centered Filename (never overlaps left/right buttons or the photo)
+            if viewModel.hasImages {
+                Text(viewModel.metadata.filename)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 260)
+                    .allowsHitTesting(false)
+            } else {
+                Text("Simple Photos")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .allowsHitTesting(false)
             }
-            .padding(.top, 10)
 
-            Spacer()
+            HStack(spacing: 4) {
+                // Space for macOS close/minimize/zoom window buttons
+                Spacer()
+                    .frame(width: 72)
 
-            // Single Compact Bottom Pill
-            bottomCompactDock
-                .allowsHitTesting(effectiveHUDVisibility)
-                .padding(.bottom, 16)
+                if viewModel.hasImages {
+                    // Rotate Right (matching Windows Photos rotate icon)
+                    WinBarIconButton(
+                        systemName: "rotate.right",
+                        help: "Rotate Right (] or ⌘R)"
+                    ) {
+                        viewModel.rotateRight()
+                    }
+
+                    // Delete / Move to Trash
+                    WinBarIconButton(
+                        systemName: "trash",
+                        isDestructive: true,
+                        help: "Move to Trash (Delete)"
+                    ) {
+                        viewModel.moveCurrentImageToTrash()
+                    }
+
+                    // Search in Yandex
+                    WinBarIconButton(
+                        systemName: "magnifyingglass",
+                        isActive: viewModel.isSearchingYandex,
+                        isDisabled: viewModel.isSearchingYandex,
+                        help: "Search Image in Yandex (Y)"
+                    ) {
+                        viewModel.searchCurrentImageInYandex()
+                    }
+
+                    // Copy Image
+                    WinBarIconButton(
+                        systemName: "doc.on.doc",
+                        help: "Copy Image to Clipboard (⌘C)"
+                    ) {
+                        viewModel.copyImageToClipboard()
+                    }
+                }
+
+                // More Options Menu (...)
+                Menu {
+                    Button {
+                        viewModel.presentOpenPanel()
+                    } label: {
+                        Label("Open Image or Folder…", systemImage: "folder.badge.plus")
+                    }
+
+                    if viewModel.hasImages {
+                        Divider()
+
+                        Button {
+                            viewModel.rotateLeft()
+                        } label: {
+                            Label("Rotate Left", systemImage: "rotate.left")
+                        }
+
+                        Button {
+                            viewModel.toggleFlipHorizontal()
+                        } label: {
+                            Label("Flip Horizontally", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                        }
+
+                        Button {
+                            viewModel.copyFilePathToClipboard()
+                        } label: {
+                            Label("Copy File Path", systemImage: "doc.on.clipboard")
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        viewModel.toggleAutoBackgroundColor()
+                    } label: {
+                        HStack {
+                            Text("Automatic Background Color")
+                            if viewModel.autoBackgroundColorEnabled {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+
+                    Button {
+                        viewModel.checkerboardBackground.toggle()
+                    } label: {
+                        HStack {
+                            Text("Show Transparency Grid")
+                            if viewModel.checkerboardBackground {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+
+                    Button {
+                        viewModel.isAlwaysOnTop.toggle()
+                    } label: {
+                        HStack {
+                            Text("Pin Window Always on Top")
+                            if viewModel.isAlwaysOnTop {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        viewModel.setAsDefaultForAllImages()
+                    } label: {
+                        HStack {
+                            Text("Set as Default for All Images")
+                            if viewModel.isDefaultImageViewer {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+
+                    Button {
+                        viewModel.restorePreviewAsDefaultForAllImages()
+                    } label: {
+                        Text("Restore Preview as Default Viewer")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .frame(width: 30, height: 28)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 30, height: 28)
+                .help("More Options")
+
+                Spacer()
+
+                // Right side button (matching Windows Photos "Open with" / Finder button)
+                if viewModel.hasImages {
+                    Button {
+                        viewModel.revealInFinder()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Show in Finder")
+                                .font(.system(size: 11.5, weight: .regular))
+                            Image(systemName: "folder")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundStyle(Color.white.opacity(0.88))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Self.windowsButtonBgGrey)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Reveal in Finder (⇧⌘R)")
+                    .padding(.trailing, 12)
+                } else {
+                    Button {
+                        viewModel.presentOpenPanel()
+                    } label: {
+                        Text("Open…")
+                            .font(.system(size: 11.5, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.88))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Self.windowsButtonBgGrey)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 12)
+                }
+            }
         }
+        .frame(height: 42)
+        .background(Self.windowsTopBarGrey)
     }
 
-    private var topCompactInfoPill: some View {
-        HStack(spacing: 7) {
-            Text(viewModel.metadata.filename)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 280)
+    // MARK: - Windows 11 Photos Bottom Status & Zoom Bar
 
-            Text("•")
-                .foregroundStyle(.white.opacity(0.35))
+    private var windowsBottomBar: some View {
+        ZStack {
+            // Center action icons (Info & Actual Size / Fit, just like Windows 11 Photos)
+            HStack(spacing: 6) {
+                WinBarIconButton(
+                    systemName: "info.circle",
+                    isActive: viewModel.showMetadataPopover,
+                    help: "File Info & Options (I)"
+                ) {
+                    viewModel.showMetadataPopover.toggle()
+                }
+                .popover(isPresented: $viewModel.showMetadataPopover, arrowEdge: .top) {
+                    metadataPopoverView
+                }
 
-            Text(viewModel.positionText)
-                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.72))
+                WinBarIconButton(
+                    systemName: "plus.viewfinder",
+                    isActive: abs(viewModel.zoomScale - 1.0) > 0.02,
+                    help: "Toggle Actual Size 1:1 / Fit (1)"
+                ) {
+                    viewModel.toggleActualSizeOrFit()
+                }
+            }
+
+            HStack(spacing: 12) {
+                // Bottom-Left: Slideshow, Format, Dimensions, File Size, Folder Index
+                HStack(spacing: 12) {
+                    WinBarIconButton(
+                        systemName: viewModel.isSlideshowActive ? "pause.rectangle" : "play.rectangle",
+                        isActive: viewModel.isSlideshowActive,
+                        isDisabled: !viewModel.canNavigate,
+                        help: "Start Slideshow (Space)"
+                    ) {
+                        viewModel.toggleSlideshow()
+                    }
+
+                    if !viewModel.metadata.fileExtensionBadge.isEmpty {
+                        Text(viewModel.metadata.fileExtensionBadge)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.72))
+                    }
+
+                    if !viewModel.metadata.dimensionsString.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "aspectratio")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Color.white.opacity(0.55))
+                            Text(viewModel.metadata.dimensionsString.replacingOccurrences(of: "×", with: "x"))
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(Color.white.opacity(0.72))
+                        }
+                    }
+
+                    if !viewModel.metadata.fileSizeFormatted.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "internaldrive")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Color.white.opacity(0.55))
+                            Text(viewModel.metadata.fileSizeFormatted)
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(Color.white.opacity(0.72))
+                        }
+                    }
+
+                    if viewModel.canNavigate {
+                        Text(viewModel.positionText)
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Color.white.opacity(0.55))
+                    }
+                }
+                .padding(.leading, 10)
+
+                Spacer()
+
+                // Bottom-Right: Fit button, Zoom Percentage dropdown, Zoom Out, Slider, Zoom In, Fullscreen
+                HStack(spacing: 6) {
+                    WinBarIconButton(
+                        systemName: "rectangle.arrowtriangle.2.inward",
+                        isDisabled: abs(viewModel.zoomScale - 1.0) < 0.01 && viewModel.panOffset == .zero,
+                        help: "Fit to Window (0)"
+                    ) {
+                        viewModel.resetZoomToFit()
+                    }
+
+                    Button {
+                        viewModel.resetZoomToFit()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(viewModel.displayZoomPercentageText)
+                                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.6))
+                        }
+                        .foregroundStyle(Color.white.opacity(0.88))
+                        .frame(minWidth: 52)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Self.windowsButtonBgGrey)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to Reset Zoom to Fit (0)")
+
+                    WinBarIconButton(
+                        systemName: "minus.magnifyingglass",
+                        help: "Zoom Out (-)"
+                    ) {
+                        viewModel.zoomOut()
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { min(max(Double(viewModel.zoomScale), 0.25), 4.0) },
+                            set: { viewModel.setZoom(CGFloat($0)) }
+                        ),
+                        in: 0.25...4.0
+                    )
+                    .controlSize(.mini)
+                    .frame(width: 88)
+
+                    WinBarIconButton(
+                        systemName: "plus.magnifyingglass",
+                        help: "Zoom In (+)"
+                    ) {
+                        viewModel.zoomIn()
+                    }
+
+                    WinBarIconButton(
+                        systemName: "arrow.up.left.and.arrow.down.right",
+                        help: "Fullscreen (Double-Click or F)"
+                    ) {
+                        viewModel.toggleFullScreen()
+                    }
+                }
+                .padding(.trailing, 8)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(
-            Capsule().strokeBorder(Color.white.opacity(0.13), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-        .onHover { hovering in
-            isHoveringHUDControl = hovering
-        }
+        .frame(height: 34)
+        .background(Self.windowsBottomBarGrey)
     }
 
-    private var bottomCompactDock: some View {
-        HStack(spacing: 4) {
-            hudIconButton(
-                systemName: "chevron.left",
-                isDisabled: !viewModel.canNavigate,
-                help: "Previous Photo (←)"
-            ) {
-                viewModel.previousImage()
-            }
-
-            hudIconButton(
-                systemName: "chevron.right",
-                isDisabled: !viewModel.canNavigate,
-                help: "Next Photo (→)"
-            ) {
-                viewModel.nextImage()
-            }
-
-            hudDivider
-
-            hudIconButton(
-                systemName: "rotate.left",
-                help: "Rotate Left ([)"
-            ) {
-                viewModel.rotateLeft()
-            }
-
-            hudIconButton(
-                systemName: "rotate.right",
-                help: "Rotate Right (])"
-            ) {
-                viewModel.rotateRight()
-            }
-
-            hudDivider
-
-            hudIconButton(
-                systemName: viewModel.autoBackgroundColorEnabled ? "paintbrush.fill" : "paintbrush",
-                isActive: viewModel.autoBackgroundColorEnabled,
-                help: "Toggle Automatic Background Color (B)"
-            ) {
-                viewModel.toggleAutoBackgroundColor()
-            }
-
-            hudIconButton(
-                systemName: "info.circle",
-                isActive: viewModel.showMetadataPopover,
-                help: "Photo Info & Options (I)"
-            ) {
-                viewModel.showMetadataPopover.toggle()
-            }
-            .popover(isPresented: $viewModel.showMetadataPopover, arrowEdge: .top) {
-                metadataPopoverView
-            }
-
-            hudIconButton(
-                systemName: "magnifyingglass",
-                isActive: viewModel.isSearchingYandex,
-                isDisabled: viewModel.isSearchingYandex,
-                help: "Search Image in Yandex (Y)"
-            ) {
-                viewModel.searchCurrentImageInYandex()
-            }
-
-            hudIconButton(
-                systemName: "folder",
-                help: "Reveal in Finder (⇧⌘R)"
-            ) {
-                viewModel.revealInFinder()
-            }
-
-            hudIconButton(
-                systemName: "trash",
-                isDestructive: true,
-                help: "Move to Trash (Delete)"
-            ) {
-                viewModel.moveCurrentImageToTrash()
-            }
-
-            hudDivider
-
-            hudIconButton(
-                systemName: "arrow.up.left.and.arrow.down.right",
-                help: "Fullscreen (Double-Click or F)"
-            ) {
-                viewModel.toggleFullScreen()
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(
-            Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 12, y: 4)
-        .onHover { hovering in
-            isHoveringHUDControl = hovering
-        }
-    }
-
-    private var hudDivider: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.15))
-            .frame(width: 1, height: 16)
-            .padding(.horizontal, 2)
-    }
-
-    private func hudIconButton(
-        systemName: String,
-        isActive: Bool = false,
-        isDisabled: Bool = false,
-        isDestructive: Bool = false,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        HUDIconButton(
-            systemName: systemName,
-            isActive: isActive,
-            isDisabled: isDisabled,
-            isDestructive: isDestructive,
-            help: help,
-            action: action
-        )
-    }
-
-    // MARK: - Metadata Popover
+    // MARK: - Metadata & Options Popover
 
     private var metadataPopoverView: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -410,7 +573,7 @@ public struct ContentView: View {
             }
         }
         .padding(14)
-        .frame(width: 290)
+        .frame(width: 295)
     }
 
     @ViewBuilder
@@ -427,69 +590,61 @@ public struct ContentView: View {
     // MARK: - Empty / Welcome State
 
     private var emptyWelcomeState: some View {
-        VStack(spacing: 22) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.blue.opacity(0.28), Color.indigo.opacity(0.18)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 84, height: 84)
-                    .overlay(
-                        Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
-                    )
+        VStack(spacing: 20) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 40, weight: .regular))
+                .foregroundStyle(.white.opacity(0.75))
 
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 36, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.92))
-            }
-
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Text("Simple Photos")
-                    .font(.system(size: 22, weight: .semibold, design: .rounded))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
 
                 Text("Drop an image or folder here, or open any photo.\nSibling photos in the same folder load automatically for ← / → browsing.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.62))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.white.opacity(0.6))
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
-                    .frame(maxWidth: 420)
+                    .frame(maxWidth: 400)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button {
                     viewModel.presentOpenPanel()
                 } label: {
-                    HStack(spacing: 7) {
+                    HStack(spacing: 6) {
                         Image(systemName: "folder.badge.plus")
                         Text("Open Image or Folder…")
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(Color.accentColor, in: Capsule())
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.accentColor)
+                    )
                 }
                 .buttonStyle(.plain)
 
                 Button {
                     SampleGalleryGenerator.openDemoGallery(in: viewModel)
                 } label: {
-                    HStack(spacing: 7) {
+                    HStack(spacing: 6) {
                         Image(systemName: "sparkles.rectangle.stack")
                         Text("Try Sample Photos")
                     }
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12.5, weight: .regular))
                     .foregroundStyle(.white.opacity(0.88))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.1), in: Capsule())
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Self.windowsButtonBgGrey)
+                    )
                     .overlay(
-                        Capsule().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 0.8)
                     )
                 }
                 .buttonStyle(.plain)
@@ -504,13 +659,13 @@ public struct ContentView: View {
                             .foregroundStyle(viewModel.isDefaultImageViewer ? .green : .white.opacity(0.85))
                         Text(viewModel.isDefaultImageViewer ? "Default for All Images (Active)" : "Set as Default for All Images")
                     }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.88))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.08), in: Capsule())
-                    .overlay(
-                        Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.8)
+                    .font(.system(size: 11.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Self.windowsButtonBgGrey)
                     )
                 }
                 .buttonStyle(.plain)
@@ -523,91 +678,28 @@ public struct ContentView: View {
                         Image(systemName: "arrow.uturn.backward.circle")
                         Text("Restore Preview as Default")
                     }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.05), in: Capsule())
-                    .overlay(
-                        Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 0.8)
+                    .font(.system(size: 11.5, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Self.windowsButtonBgGrey.opacity(0.6))
                     )
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isUpdatingDefaultViewer)
             }
-
-            HStack(spacing: 14) {
-                shortcutBadge("← / →", "Prev / Next")
-                shortcutBadge("Double-Click", "Fullscreen")
-                shortcutBadge("Scroll / Pinch", "Zoom")
-                shortcutBadge("[ / ]", "Rotate")
-                shortcutBadge("⌫", "Trash")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.white.opacity(0.05), in: Capsule())
-            .overlay(
-                Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8)
-            )
-            .padding(.top, 8)
         }
         .padding(32)
     }
 
-    private func shortcutBadge(_ key: String, _ label: String) -> some View {
-        HStack(spacing: 5) {
-            Text(key)
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
-        }
-    }
-
-    // MARK: - Hover & Traffic Light Visibility
-
-    private func registerUserActivity() {
-        guard !viewModel.isFullScreen else { return }
-        setHUDVisible(true)
-        scheduleHUDHide()
-    }
-
-    private func scheduleHUDHide() {
-        hideTimerWorkItem?.cancel()
-        guard viewModel.hasImages && !viewModel.isFullScreen else { return }
-
-        let item = DispatchWorkItem {
-            if !isHoveringHUDControl && !viewModel.showMetadataPopover {
-                setHUDVisible(false)
-            }
-        }
-        hideTimerWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: item)
-    }
-
-    private func setHUDVisible(_ visible: Bool) {
-        if isHUDVisible != visible {
-            isHUDVisible = visible
-        }
-        updateWindowTrafficLights(visible: (visible && !viewModel.isFullScreen) || !viewModel.hasImages)
-    }
-
-    private func updateWindowTrafficLights(visible: Bool) {
+    private func ensureTrafficLightsVisible() {
         guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first else {
             return
         }
-        let targetAlpha: CGFloat = visible ? 1.0 : 0.0
         for btnType: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
-            if let btn = window.standardWindowButton(btnType) {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    btn.animator().alphaValue = targetAlpha
-                }
-            }
+            window.standardWindowButton(btnType)?.alphaValue = 1.0
         }
     }
 
@@ -641,9 +733,9 @@ public struct ContentView: View {
     }
 }
 
-// MARK: - Helper Subviews
+// MARK: - Windows 11 Style Flat Toolbar Button
 
-private struct HUDIconButton: View {
+private struct WinBarIconButton: View {
     let systemName: String
     var isActive: Bool = false
     var isDisabled: Bool = false
@@ -656,10 +748,10 @@ private struct HUDIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(foregroundColor)
-                .frame(width: 28, height: 26)
-                .background(backgroundColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .frame(width: 30, height: 26)
+                .background(backgroundColor, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -674,12 +766,12 @@ private struct HUDIconButton: View {
             return .white.opacity(0.28)
         }
         if isDestructive && isHovered {
-            return Color(red: 1.0, green: 0.42, blue: 0.42)
+            return Color(red: 1.0, green: 0.45, blue: 0.45)
         }
         if isActive {
             return Color.accentColor
         }
-        return .white.opacity(isHovered ? 1.0 : 0.85)
+        return .white.opacity(isHovered ? 0.98 : 0.82)
     }
 
     private var backgroundColor: Color {
@@ -687,10 +779,10 @@ private struct HUDIconButton: View {
             return .clear
         }
         if isActive {
-            return Color.white.opacity(0.16)
+            return Color.white.opacity(0.12)
         }
         if isHovered {
-            return isDestructive ? Color.red.opacity(0.18) : Color.white.opacity(0.12)
+            return Color.white.opacity(0.08)
         }
         return .clear
     }
@@ -702,8 +794,8 @@ private struct CheckerboardBackgroundView: View {
             let tileSize: CGFloat = 16
             let cols = Int(ceil(size.width / tileSize))
             let rows = Int(ceil(size.height / tileSize))
-            let dark = Color(white: 0.12)
-            let light = Color(white: 0.18)
+            let dark = Color(white: 0.14)
+            let light = Color(white: 0.20)
 
             context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(dark))
 
