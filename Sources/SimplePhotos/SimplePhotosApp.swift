@@ -348,6 +348,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     private func handleExtremeEdgeMouseDown(_ event: NSEvent) -> Bool {
+        // If user is currently editing the filename in the top bar and clicks anywhere outside it,
+        // immediately resign first responder so the rename commits and saves on click-away!
+        if let window = mainWindow,
+           let editorView = window.firstResponder as? NSTextView,
+           let field = (editorView.superview?.superview as? FilenameNSTextField) ?? (editorView.superview as? FilenameNSTextField) {
+            let ptInField = field.convert(event.locationInWindow, from: nil)
+            if !field.actualTextRect().contains(ptInField) {
+                window.makeFirstResponder(nil)
+            }
+        }
+
         guard viewModel.hasImages,
               viewModel.canNavigate,
               viewModel.zoomScale <= 1.01,
@@ -404,6 +415,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        if viewModel.isRenamingFilename {
+            if event.keyCode == 53 { // Escape cancels rename
+                viewModel.cancelRenamingCurrentImage()
+                return true
+            }
+            return false
+        }
         if let firstResponder = NSApp.keyWindow?.firstResponder,
            firstResponder is NSTextView || firstResponder is NSTextField {
             return false
@@ -607,9 +625,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                     viewModel.searchCurrentImageInYandex()
                     return true
                 }
-            case "g":
-                viewModel.checkerboardBackground.toggle()
-                return true
             case "i":
                 viewModel.showMetadataPopover.toggle()
                 return true

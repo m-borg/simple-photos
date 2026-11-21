@@ -105,12 +105,15 @@ public final class PhotoViewerViewModel: ObservableObject {
             updateWindowLevel()
         }
     }
-    @Published public var checkerboardBackground: Bool = false
 
     // Selection & Crop State (Normalized 0...1 in displayed image coordinates, origin bottom-left)
     @Published public var normalizedSelectionRect: CGRect? = nil
     @Published public var isCropToolActive: Bool = false
     @Published public private(set) var canUndoEdit: Bool = false
+
+    // Inline Filename Rename State
+    @Published public var isRenamingFilename: Bool = false
+    @Published public var renameDraftText: String = ""
 
     // Tracks per-URL session rotation and created crop files for undo
     private var sessionRotations: [URL: Int] = [:]
@@ -373,6 +376,7 @@ public final class PhotoViewerViewModel: ObservableObject {
         isFlippedHorizontally = false
         normalizedSelectionRect = nil
         isCropToolActive = false
+        isRenamingFilename = false
         rotationDegrees = sessionRotations[url] ?? 0
         canUndoEdit = !createdCropURLsStack.isEmpty
 
@@ -812,23 +816,26 @@ public final class PhotoViewerViewModel: ObservableObject {
         zoomScale = clamped
     }
 
+    public static let zoomPercentagePresets: [Int] = [10, 25, 50, 75, 100, 150, 200, 300, 400, 500]
+
+    public func setDisplayZoomPercentage(_ percentage: Int) {
+        let base = fitBaseScale > 0 ? fitBaseScale : 1.0
+        let targetScale = (CGFloat(percentage) / 100.0) / base
+        setZoom(targetScale)
+    }
+
     public func resetZoomToFit() {
         zoomScale = 1.0
         panOffset = .zero
     }
 
     public func toggleActualSizeOrFit() {
-        if abs(zoomScale - 1.0) > 0.02 {
-            resetZoomToFit()
+        let base = fitBaseScale > 0 ? fitBaseScale : 1.0
+        let oneToOneScale = 1.0 / base
+        if abs(zoomScale - oneToOneScale) > 0.02 {
+            setZoom(oneToOneScale)
         } else {
-            let targetScale: CGFloat
-            if fitBaseScale > 0 && fitBaseScale < 0.98 {
-                targetScale = max(1.5, min(maxZoomScale, 1.0 / fitBaseScale))
-            } else {
-                targetScale = 2.0
-            }
-            zoomScale = targetScale
-            panOffset = .zero
+            resetZoomToFit()
         }
     }
 
@@ -893,6 +900,82 @@ public final class PhotoViewerViewModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    // MARK: - Inline Filename Renaming
+
+    public var currentFileExtensionWithDot: String {
+        guard let url = currentURL else { return "" }
+        let ext = url.pathExtension
+        return ext.isEmpty ? "" : ".\(ext)"
+    }
+
+    public func beginRenamingCurrentImage() {
+        guard let url = currentURL else { return }
+        renameDraftText = url.deletingPathExtension().lastPathComponent
+        isRenamingFilename = true
+    }
+
+    public func cancelRenamingCurrentImage() {
+        isRenamingFilename = false
+    }
+
+    @discardableResult
+    public func commitRenameCurrentImage(to rawInput: String? = nil) -> Bool {
+        let draft = (rawInput ?? renameDraftText).trimmingCharacters(in: .whitespacesAndNewlines)
+        isRenamingFilename = false
+
+        guard let oldURL = currentURL, !draft.isEmpty else {
+            return false
+        }
+
+        var sanitized = draft
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let origExt = oldURL.pathExtension
+        if !origExt.isEmpty && sanitized.lowercased().hasSuffix(".\(origExt.lowercased())") {
+            sanitized = String(sanitized.dropLast(origExt.count + 1))
+        }
+        guard !sanitized.isEmpty else { return false }
+
+        let newFilename = origExt.isEmpty ? sanitized : "\(sanitized).\(origExt)"
+        if newFilename == oldURL.lastPathComponent {
+            return true
+        }
+
+        let parentDir = oldURL.deletingLastPathComponent()
+        let newURL = parentDir.appendingPathComponent(newFilename).standardizedFileURL
+        let fm = FileManager.default
+
+        if fm.fileExists(atPath: newURL.path) && newURL.path.lowercased() != oldURL.path.lowercased() {
+            showToast("“\(newFilename)” already exists")
+            return false
+        }
+
+        do {
+            try fm.moveItem(at: oldURL, to: newURL)
+
+            if let cached = photoCache.object(forKey: oldURL as NSURL) {
+                photoCache.removeObject(forKey: oldURL as NSURL)
+                photoCache.setObject(cached, forKey: newURL as NSURL)
+            }
+            if let rot = sessionRotations.removeValue(forKey: oldURL) {
+                sessionRotations[newURL] = rot
+            }
+
+            imageURLs[currentIndex] = newURL
+            metadata.filename = newURL.lastPathComponent
+            metadata.filePath = newURL.path
+
+            NSWorkspace.shared.noteFileSystemChanged(parentDir.path)
+            showToast("Renamed to “\(newURL.lastPathComponent)”")
+            return true
+        } catch {
+            showToast("Could not rename file")
+            return false
+        }
+    }
+
     public func copyImageToClipboard() {
         if let cgImage = currentCGImage, normalizedSelectionRect != nil {
             let oriented = Self.createOrientedCGImage(
@@ -941,13 +1024,11 @@ public final class PhotoViewerViewModel: ObservableObject {
 
     public func toggleCropMode() {
         guard hasImages else { return }
-        if hasActiveSelection {
-            cropToSelection()
+        if hasActiveSelection || isCropToolActive {
+            clearSelection()
         } else {
-            isCropToolActive.toggle()
-            if !isCropToolActive {
-                normalizedSelectionRect = nil
-            }
+            isCropToolActive = true
+            normalizedSelectionRect = CGRect(x: 0.12, y: 0.12, width: 0.76, height: 0.76)
         }
     }
 

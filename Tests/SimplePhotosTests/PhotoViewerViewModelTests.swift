@@ -116,14 +116,28 @@ final class PhotoViewerViewModelTests: XCTestCase {
 
         XCTAssertEqual(vm.zoomScale, 1.0)
         XCTAssertEqual(vm.zoomPercentageText, "Fit")
+        XCTAssertEqual(vm.displayZoomPercentageText, "50%")
 
         vm.toggleActualSizeOrFit()
         XCTAssertEqual(vm.zoomScale, 2.0, accuracy: 0.01)
-        XCTAssertEqual(vm.zoomPercentageText, "200%")
+        XCTAssertEqual(vm.displayZoomPercentageText, "100%")
+
+        vm.setDisplayZoomPercentage(200)
+        XCTAssertEqual(vm.displayZoomPercentageText, "200%")
+
+        vm.toggleActualSizeOrFit()
+        XCTAssertEqual(vm.displayZoomPercentageText, "100%")
 
         vm.toggleActualSizeOrFit()
         XCTAssertEqual(vm.zoomScale, 1.0, accuracy: 0.01)
         XCTAssertEqual(vm.zoomPercentageText, "Fit")
+
+        // Clicking Crop button immediately starts cropping with an active selection box
+        XCTAssertFalse(vm.hasActiveSelection)
+        vm.toggleCropMode()
+        XCTAssertTrue(vm.hasActiveSelection)
+        vm.toggleCropMode()
+        XCTAssertFalse(vm.hasActiveSelection)
     }
 
     func testInteractiveCanvasActuallyRendersNonBlackImagePixels() throws {
@@ -357,5 +371,25 @@ final class PhotoViewerViewModelTests: XCTestCase {
         let pixelH = round(normSquare.height * 200.0)
         XCTAssertEqual(pixelW, 140, accuracy: 0.5)
         XCTAssertEqual(pixelH, 140, accuracy: 0.5, "Shift-drag must produce a true 1:1 pixel square even on rectangular images")
+    }
+
+    func testInlineFilenameRenamingPreservesExtensionAndRenamesFileOnDisk() throws {
+        let origURL = try createTestPNG(named: "old_name.png", width: 100, height: 100)
+        let vm = PhotoViewerViewModel()
+        vm.open(urls: [origURL])
+        vm.loadCurrentImageSynchronously()
+
+        vm.beginRenamingCurrentImage()
+        XCTAssertTrue(vm.isRenamingFilename)
+        XCTAssertEqual(vm.renameDraftText, "old_name")
+        XCTAssertEqual(vm.currentFileExtensionWithDot, ".png")
+
+        let ok = vm.commitRenameCurrentImage(to: "new_custom_title")
+        XCTAssertTrue(ok)
+        XCTAssertFalse(vm.isRenamingFilename)
+        XCTAssertEqual(vm.currentURL?.lastPathComponent, "new_custom_title.png")
+        XCTAssertEqual(vm.metadata.filename, "new_custom_title.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("new_custom_title.png").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: origURL.path))
     }
 }

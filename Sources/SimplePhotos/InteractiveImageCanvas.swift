@@ -116,12 +116,121 @@ public final class InteractiveCanvasNSView: NSView {
         }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
         trackingArea = area
+    }
+
+    override public func cursorUpdate(with event: NSEvent) {
+        let pt = convert(event.locationInWindow, from: nil)
+        updateCursor(for: pt)
+    }
+
+    private static func diagonalCursor(nwse: Bool) -> NSCursor {
+        let selName = nwse ? "_windowResizeNorthWestSouthEastCursor" : "_windowResizeNorthEastSouthWestCursor"
+        let sel = NSSelectorFromString(selName)
+        if NSCursor.responds(to: sel),
+           let unmanaged = NSCursor.perform(sel),
+           let cursor = unmanaged.takeUnretainedValue() as? NSCursor {
+            return cursor
+        }
+        return .crosshair
+    }
+
+    private func cursorForResizeHandle(_ handle: ResizeHandle) -> NSCursor {
+        switch handle {
+        case .left, .right:
+            return .resizeLeftRight
+        case .top, .bottom:
+            return .resizeUpDown
+        case .topLeft, .bottomRight:
+            return Self.diagonalCursor(nwse: true)
+        case .topRight, .bottomLeft:
+            return Self.diagonalCursor(nwse: false)
+        }
+    }
+
+    private func updateCursor(for pt: NSPoint) {
+        guard let vm = viewModel, vm.hasImages else {
+            NSCursor.arrow.set()
+            return
+        }
+
+        // 1. Active drag state takes priority
+        switch selectionDragState {
+        case .creatingNew:
+            NSCursor.crosshair.set()
+            return
+        case .movingExisting:
+            NSCursor.closedHand.set()
+            return
+        case .resizingHandle(let handle, _):
+            cursorForResizeHandle(handle).set()
+            return
+        case .potentialNew, .none:
+            break
+        }
+
+        if isPanningImage {
+            NSCursor.closedHand.set()
+            return
+        }
+
+        // 2. If a crop selection is active, check inline buttons, 8 resize handles, and selection interior
+        if vm.hasActiveSelection,
+           let normRect = vm.normalizedSelectionRect,
+           let imgRect = currentDisplayedImageRect() {
+            if let bar = currentInlineActionBarLayout(for: vm) {
+                if bar.hitTest(pt) != nil {
+                    NSCursor.pointingHand.set()
+                    return
+                }
+                if bar.containerRect.contains(pt) {
+                    NSCursor.arrow.set()
+                    return
+                }
+            }
+
+            let selViewRect = selectionViewRect(for: normRect, in: imgRect)
+            if let handle = hitTestResizeHandle(at: pt, selectionRect: selViewRect) {
+                cursorForResizeHandle(handle).set()
+                return
+            }
+            if selViewRect.contains(pt) {
+                NSCursor.openHand.set()
+                return
+            }
+            if imgRect.contains(pt) {
+                NSCursor.crosshair.set()
+                return
+            }
+        }
+
+        // 3. If crop tool is explicitly active
+        if vm.isCropToolActive, let imgRect = currentDisplayedImageRect(), imgRect.contains(pt) {
+            NSCursor.crosshair.set()
+            return
+        }
+
+        // 4. If zoomed in, show open hand for panning
+        if vm.zoomScale > 1.01 {
+            NSCursor.openHand.set()
+            return
+        }
+
+        // 5. Left / Right side click navigation zones show pointingHand cursor
+        if vm.canNavigate {
+            let zone = navigationZone(for: pt, isFullScreen: vm.isFullScreen)
+            if zone == .leftPrevious || zone == .rightNext {
+                NSCursor.pointingHand.set()
+                return
+            }
+        }
+
+        NSCursor.arrow.set()
     }
 
     override public func setFrameSize(_ newSize: NSSize) {
@@ -218,7 +327,7 @@ public final class InteractiveCanvasNSView: NSView {
         let availH = bounds.height
         guard availW > 8, availH > 8 else { return }
 
-        if vm.autoBackgroundColorEnabled && !vm.checkerboardBackground,
+        if vm.autoBackgroundColorEnabled,
            let bgColor = vm.detectedBackgroundColor {
             ctx.saveGState()
             ctx.setFillColor(bgColor.cgColor)
@@ -569,10 +678,12 @@ public final class InteractiveCanvasNSView: NSView {
 
     override public func mouseMoved(with event: NSEvent) {
         onUserActivity?()
+        let pt = convert(event.locationInWindow, from: nil)
+        updateCursor(for: pt)
+
         guard let vm = viewModel else { return }
 
         if vm.hasActiveSelection, let bar = currentInlineActionBarLayout(for: vm) {
-            let pt = convert(event.locationInWindow, from: nil)
             let hit = bar.hitTest(pt)
             if hoveredInlineButton != hit {
                 hoveredInlineButton = hit
@@ -586,6 +697,16 @@ public final class InteractiveCanvasNSView: NSView {
 
     override public func mouseEntered(with event: NSEvent) {
         onUserActivity?()
+        let pt = convert(event.locationInWindow, from: nil)
+        updateCursor(for: pt)
+    }
+
+    override public func mouseExited(with event: NSEvent) {
+        if hoveredInlineButton != nil {
+            hoveredInlineButton = nil
+            needsDisplay = true
+        }
+        NSCursor.arrow.set()
     }
 
     override public func mouseDown(with event: NSEvent) {
@@ -697,6 +818,7 @@ public final class InteractiveCanvasNSView: NSView {
         guard let vm = viewModel else { return }
         let current = convert(event.locationInWindow, from: nil)
         lastMouseViewPoint = current
+        updateCursor(for: current)
         let isShiftDown = event.modifierFlags.contains(.shift)
 
         // Handle active or potential selection box drag
@@ -846,6 +968,7 @@ public final class InteractiveCanvasNSView: NSView {
             if let rect = vm.normalizedSelectionRect, (rect.width < 0.01 || rect.height < 0.01) {
                 vm.clearSelection()
             }
+            updateCursor(for: pt)
             needsDisplay = true
             return
 
@@ -1144,14 +1267,6 @@ public final class InteractiveCanvasNSView: NSView {
         autoBgItem.target = self
         menu.addItem(autoBgItem)
 
-        let checkerItem = NSMenuItem(
-            title: vm.checkerboardBackground ? "Hide Transparency Grid" : "Show Transparency Grid",
-            action: #selector(ctxToggleCheckerboard),
-            keyEquivalent: "g"
-        )
-        checkerItem.target = self
-        menu.addItem(checkerItem)
-
         menu.addItem(.separator())
 
         let yandexItem = NSMenuItem(
@@ -1214,7 +1329,6 @@ public final class InteractiveCanvasNSView: NSView {
     @objc private func ctxRotateRight() { viewModel?.rotateRight() }
     @objc private func ctxFlip() { viewModel?.toggleFlipHorizontal() }
     @objc private func ctxToggleAutoBackground() { viewModel?.toggleAutoBackgroundColor() }
-    @objc private func ctxToggleCheckerboard() { viewModel?.checkerboardBackground.toggle() }
     @objc private func ctxSearchYandex() { viewModel?.searchCurrentImageInYandex() }
     @objc private func ctxCopyImage() { viewModel?.copyImageToClipboard() }
     @objc private func ctxCopyPath() { viewModel?.copyFilePathToClipboard() }

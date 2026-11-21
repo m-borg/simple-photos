@@ -92,10 +92,8 @@ public struct ContentView: View {
 
     @ViewBuilder
     private var canvasBackgroundLayer: some View {
-        if viewModel.checkerboardBackground && viewModel.hasImages && !viewModel.isFullScreen {
-            CheckerboardBackgroundView()
-        } else if viewModel.autoBackgroundColorEnabled && viewModel.hasImages,
-                  let bgColor = viewModel.detectedBackgroundColor {
+        if viewModel.autoBackgroundColorEnabled && viewModel.hasImages,
+           let bgColor = viewModel.detectedBackgroundColor {
             Color(nsColor: bgColor)
         } else {
             Self.windowsCanvasGrey
@@ -106,15 +104,10 @@ public struct ContentView: View {
 
     private var windowsTopBar: some View {
         ZStack {
-            // Centered Filename (never overlaps left/right buttons or the photo)
+            // Centered Filename (click to rename inline; never overlaps left/right buttons or the photo)
             if viewModel.hasImages {
-                Text(viewModel.metadata.filename)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.white.opacity(0.88))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                EditableTopBarFilenameView(viewModel: viewModel)
                     .padding(.horizontal, 260)
-                    .allowsHitTesting(false)
             } else {
                 Text("Simple Photos")
                     .font(.system(size: 12, weight: .medium))
@@ -182,99 +175,13 @@ public struct ContentView: View {
                     }
                 }
 
-                // More Options Menu (...)
-                Menu {
-                    Button {
-                        viewModel.presentOpenPanel()
-                    } label: {
-                        Label("Open Image or Folder…", systemImage: "folder.badge.plus")
-                    }
-
-                    if viewModel.hasImages {
-                        Divider()
-
-                        Button {
-                            viewModel.rotateLeft()
-                        } label: {
-                            Label("Rotate Left", systemImage: "rotate.left")
-                        }
-
-                        Button {
-                            viewModel.toggleFlipHorizontal()
-                        } label: {
-                            Label("Flip Horizontally", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
-                        }
-
-                        Button {
-                            viewModel.copyFilePathToClipboard()
-                        } label: {
-                            Label("Copy File Path", systemImage: "doc.on.clipboard")
-                        }
-                    }
-
-                    Divider()
-
-                    Button {
-                        viewModel.toggleAutoBackgroundColor()
-                    } label: {
-                        HStack {
-                            Text("Automatic Background Color")
-                            if viewModel.autoBackgroundColorEnabled {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-
-                    Button {
-                        viewModel.checkerboardBackground.toggle()
-                    } label: {
-                        HStack {
-                            Text("Show Transparency Grid")
-                            if viewModel.checkerboardBackground {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-
-                    Button {
-                        viewModel.isAlwaysOnTop.toggle()
-                    } label: {
-                        HStack {
-                            Text("Pin Window Always on Top")
-                            if viewModel.isAlwaysOnTop {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-
-                    Divider()
-
-                    Button {
-                        viewModel.setAsDefaultForAllImages()
-                    } label: {
-                        HStack {
-                            Text("Set as Default for All Images")
-                            if viewModel.isDefaultImageViewer {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-
-                    Button {
-                        viewModel.restorePreviewAsDefaultForAllImages()
-                    } label: {
-                        Text("Restore Preview as Default Viewer")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .frame(width: 30, height: 28)
+                // More Options Button (...) — uses WinBarIconButton + NSMenu so the entire 30x26 box (including edges) is 100% clickable
+                WinBarIconButton(
+                    systemName: "ellipsis",
+                    help: "More Options"
+                ) {
+                    presentMoreOptionsMenu()
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 30, height: 28)
-                .help("More Options")
 
                 Spacer()
 
@@ -302,6 +209,7 @@ public struct ContentView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .pointerCursorOnHover()
                     .help("Reveal in Finder (⇧⌘R)")
                     .padding(.trailing, 12)
                 } else {
@@ -319,6 +227,7 @@ public struct ContentView: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .pointerCursorOnHover()
                     .padding(.trailing, 12)
                 }
             }
@@ -354,17 +263,8 @@ public struct ContentView: View {
             }
 
             HStack(spacing: 12) {
-                // Bottom-Left: Slideshow, Format, Dimensions, File Size, Folder Index
+                // Bottom-Left: Format, Dimensions, File Size, Folder Index (removed video-like button)
                 HStack(spacing: 12) {
-                    WinBarIconButton(
-                        systemName: viewModel.isSlideshowActive ? "pause.rectangle" : "play.rectangle",
-                        isActive: viewModel.isSlideshowActive,
-                        isDisabled: !viewModel.canNavigate,
-                        help: "Start Slideshow (Space)"
-                    ) {
-                        viewModel.toggleSlideshow()
-                    }
-
                     if !viewModel.metadata.fileExtensionBadge.isEmpty {
                         Text(viewModel.metadata.fileExtensionBadge)
                             .font(.system(size: 11, weight: .medium))
@@ -414,7 +314,7 @@ public struct ContentView: View {
                     }
 
                     Button {
-                        viewModel.resetZoomToFit()
+                        presentZoomPresetsMenu()
                     } label: {
                         HStack(spacing: 4) {
                             Text(viewModel.displayZoomPercentageText)
@@ -435,9 +335,11 @@ public struct ContentView: View {
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8)
                         )
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Click to Reset Zoom to Fit (0)")
+                    .pointerCursorOnHover()
+                    .help("Select Zoom Level")
 
                     WinBarIconButton(
                         systemName: "minus.magnifyingglass",
@@ -721,6 +623,89 @@ public struct ContentView: View {
         }
     }
 
+    // MARK: - Native Popup Menus for Full-Hitbox Toolbar Buttons
+
+    private func presentMoreOptionsMenu() {
+        let menu = NSMenu(title: "More Options")
+
+        menu.addItem(ActionMenuItem(title: "Open Image or Folder…") { [weak viewModel] in
+            viewModel?.presentOpenPanel()
+        })
+
+        if viewModel.hasImages {
+            menu.addItem(.separator())
+
+            menu.addItem(ActionMenuItem(title: "Rename File…") { [weak viewModel] in
+                viewModel?.beginRenamingCurrentImage()
+            })
+
+            menu.addItem(ActionMenuItem(title: "Rotate Left") { [weak viewModel] in
+                viewModel?.rotateLeft()
+            })
+
+            menu.addItem(ActionMenuItem(title: "Flip Horizontally") { [weak viewModel] in
+                viewModel?.toggleFlipHorizontal()
+            })
+
+            menu.addItem(ActionMenuItem(title: "Copy File Path") { [weak viewModel] in
+                viewModel?.copyFilePathToClipboard()
+            })
+        }
+
+        menu.addItem(.separator())
+
+        let autoBg = ActionMenuItem(title: "Automatic Background Color") { [weak viewModel] in
+            viewModel?.toggleAutoBackgroundColor()
+        }
+        autoBg.state = viewModel.autoBackgroundColorEnabled ? .on : .off
+        menu.addItem(autoBg)
+
+        let pinTop = ActionMenuItem(title: "Pin Window Always on Top") { [weak viewModel] in
+            viewModel?.isAlwaysOnTop.toggle()
+        }
+        pinTop.state = viewModel.isAlwaysOnTop ? .on : .off
+        menu.addItem(pinTop)
+
+        menu.addItem(.separator())
+
+        let setDef = ActionMenuItem(title: "Set as Default for All Images") { [weak viewModel] in
+            viewModel?.setAsDefaultForAllImages()
+        }
+        setDef.state = viewModel.isDefaultImageViewer ? .on : .off
+        menu.addItem(setDef)
+
+        menu.addItem(ActionMenuItem(title: "Restore Preview as Default Viewer") { [weak viewModel] in
+            viewModel?.restorePreviewAsDefaultForAllImages()
+        })
+
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    private func presentZoomPresetsMenu() {
+        let menu = NSMenu(title: "Zoom Level")
+
+        let fitItem = ActionMenuItem(title: "Fit to window") { [weak viewModel] in
+            viewModel?.resetZoomToFit()
+        }
+        if abs(viewModel.zoomScale - 1.0) < 0.01 && viewModel.panOffset == .zero {
+            fitItem.state = .on
+        }
+        menu.addItem(fitItem)
+        menu.addItem(.separator())
+
+        for pct in PhotoViewerViewModel.zoomPercentagePresets {
+            let item = ActionMenuItem(title: "\(pct)%") { [weak viewModel] in
+                viewModel?.setDisplayZoomPercentage(pct)
+            }
+            if viewModel.displayZoomPercentageText == "\(pct)%" && abs(viewModel.zoomScale - 1.0) >= 0.01 {
+                item.state = .on
+            }
+            menu.addItem(item)
+        }
+
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
     // MARK: - SwiftUI Drop Fallback
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -770,12 +755,20 @@ private struct WinBarIconButton: View {
                 .foregroundStyle(foregroundColor)
                 .frame(width: 30, height: 26)
                 .background(backgroundColor, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .help(help)
         .onHover { hovering in
             isHovered = hovering
+            if !isDisabled {
+                if hovering {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
         }
     }
 
@@ -806,27 +799,204 @@ private struct WinBarIconButton: View {
     }
 }
 
-private struct CheckerboardBackgroundView: View {
+private extension View {
+    func pointerCursorOnHover() -> some View {
+        self.onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+}
+
+// MARK: - Inline Top-Bar Filename Editor & Menu Helper
+
+private final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(invoke), keyEquivalent: "")
+        self.target = self
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func invoke() {
+        handler()
+    }
+}
+
+private struct EditableTopBarFilenameView: View {
+    @ObservedObject var viewModel: PhotoViewerViewModel
+
     var body: some View {
-        Canvas { context, size in
-            let tileSize: CGFloat = 16
-            let cols = Int(ceil(size.width / tileSize))
-            let rows = Int(ceil(size.height / tileSize))
-            let dark = Color(white: 0.14)
-            let light = Color(white: 0.20)
+        PlainFilenameTextField(
+            filename: viewModel.metadata.filename,
+            isEditing: $viewModel.isRenamingFilename,
+            onCommit: { newText in
+                viewModel.commitRenameCurrentImage(to: newText)
+            },
+            onCancel: {
+                viewModel.cancelRenamingCurrentImage()
+            }
+        )
+        .frame(maxWidth: 360, maxHeight: 22)
+    }
+}
 
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(dark))
+public final class FilenameNSTextField: NSTextField {
+    var onStartEditing: (() -> Void)?
 
-            for r in 0..<rows {
-                for c in 0..<cols where (r + c).isMultiple(of: 2) {
-                    let rect = CGRect(
-                        x: CGFloat(c) * tileSize,
-                        y: CGFloat(r) * tileSize,
-                        width: tileSize,
-                        height: tileSize
-                    )
-                    context.fill(Path(rect), with: .color(light))
+    /// Returns the tight bounding box around the actual visible text characters (not the full 360pt layout container).
+    public func actualTextRect() -> NSRect {
+        let currentStr = (currentEditor()?.string ?? stringValue) as NSString
+        let fontToUse = self.font ?? NSFont.systemFont(ofSize: 12, weight: .regular)
+        let measuredWidth = ceil(currentStr.size(withAttributes: [.font: fontToUse]).width)
+        let tightWidth = max(24, min(bounds.width, measuredWidth + 10))
+        let x = bounds.midX - tightWidth * 0.5
+        return NSRect(x: x, y: bounds.minY, width: tightWidth, height: bounds.height)
+    }
+
+    override public func hitTest(_ point: NSPoint) -> NSView? {
+        // Convert point from superview coordinates to local bounds
+        let localPt = convert(point, from: superview)
+        guard actualTextRect().contains(localPt) else {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+
+    override public func mouseDown(with event: NSEvent) {
+        let localPt = convert(event.locationInWindow, from: nil)
+        guard actualTextRect().contains(localPt) else {
+            if currentEditor() != nil {
+                window?.makeFirstResponder(nil)
+            }
+            window?.performDrag(with: event)
+            return
+        }
+
+        let wasEditing = (currentEditor() != nil)
+        onStartEditing?()
+        super.mouseDown(with: event)
+
+        // On first click into the filename, select the stem (before the file extension) for fast renaming
+        if !wasEditing, let editor = currentEditor() {
+            let full = stringValue as NSString
+            let ext = full.pathExtension
+            if !ext.isEmpty && full.length > ext.count + 1 {
+                editor.selectedRange = NSRange(location: 0, length: full.length - ext.count - 1)
+            } else {
+                editor.selectAll(nil)
+            }
+        }
+    }
+}
+
+private struct PlainFilenameTextField: NSViewRepresentable {
+    var filename: String
+    @Binding var isEditing: Bool
+    var onCommit: (String) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> FilenameNSTextField {
+        let tf = FilenameNSTextField(string: filename)
+        tf.isBordered = false
+        tf.drawsBackground = false
+        tf.focusRingType = .none
+        tf.isEditable = true
+        tf.isSelectable = true
+        tf.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        tf.textColor = NSColor.white.withAlphaComponent(0.88)
+        tf.alignment = .center
+        tf.delegate = context.coordinator
+        tf.cell?.usesSingleLineMode = true
+        tf.cell?.wraps = false
+        tf.cell?.isScrollable = true
+        tf.cell?.lineBreakMode = .byTruncatingMiddle
+        tf.refusesFirstResponder = true
+
+        tf.onStartEditing = { [weak tf, weak coord = context.coordinator] in
+            guard let tf, let coord else { return }
+            tf.refusesFirstResponder = false
+            coord.didCancel = false
+            coord.parent.isEditing = true
+            tf.window?.makeFirstResponder(tf)
+        }
+        return tf
+    }
+
+    func updateNSView(_ nsView: FilenameNSTextField, context: Context) {
+        context.coordinator.parent = self
+        if nsView.currentEditor() == nil {
+            if nsView.stringValue != filename {
+                nsView.stringValue = filename
+            }
+            nsView.refusesFirstResponder = !isEditing
+            if isEditing {
+                DispatchQueue.main.async {
+                    nsView.refusesFirstResponder = false
+                    nsView.window?.makeFirstResponder(nsView)
+                    if let editor = nsView.currentEditor() {
+                        let full = nsView.stringValue as NSString
+                        let ext = full.pathExtension
+                        if !ext.isEmpty && full.length > ext.count + 1 {
+                            editor.selectedRange = NSRange(location: 0, length: full.length - ext.count - 1)
+                        } else {
+                            editor.selectAll(nil)
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: PlainFilenameTextField
+        var didCancel = false
+
+        init(_ parent: PlainFilenameTextField) {
+            self.parent = parent
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                didCancel = false
+                control.window?.makeFirstResponder(nil)
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                didCancel = true
+                control.stringValue = parent.filename
+                parent.onCancel()
+                control.window?.makeFirstResponder(nil)
+                return true
+            }
+            return false
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard let tf = obj.object as? FilenameNSTextField else { return }
+            tf.refusesFirstResponder = true
+            if didCancel {
+                didCancel = false
+                tf.stringValue = parent.filename
+                return
+            }
+            let newText = tf.stringValue
+            parent.onCommit(newText)
+            DispatchQueue.main.async { [weak tf, weak self] in
+                guard let tf, let self else { return }
+                tf.stringValue = self.parent.filename
             }
         }
     }
