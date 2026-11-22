@@ -9,10 +9,17 @@ CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-echo "==> Building ${APP_NAME} (Release)..."
-swift build -c release
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo "27.2")"
+
+echo "==> Building ${APP_NAME} (Release, SDK ${SDK_VERSION})..."
+swift build -c release -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "${SDK_VERSION}"
 
 BIN_PATH="$(swift build -c release --show-bin-path)/${APP_NAME}"
+
+# Ensure Mach-O LC_BUILD_VERSION advertises the current macOS SDK so native Liquid Glass window chrome is enabled
+if command -v vtool >/dev/null 2>&1; then
+    vtool -set-build-version macos 14.0 "${SDK_VERSION}" -replace -output "${BIN_PATH}.patched" "${BIN_PATH}" 2>/dev/null && mv "${BIN_PATH}.patched" "${BIN_PATH}" || true
+fi
 
 echo "==> Packaging ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"

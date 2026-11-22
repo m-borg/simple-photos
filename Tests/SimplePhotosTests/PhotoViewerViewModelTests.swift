@@ -392,4 +392,51 @@ final class PhotoViewerViewModelTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("new_custom_title.png").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: origURL.path))
     }
+
+    func testDirectoryWithImageExtensionIsIgnoredByFolderScan() throws {
+        let validImg = try createTestPNG(named: "real_photo.png")
+        let fakeFolder = tempDir.appendingPathComponent("folder_named.jpg", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeFolder, withIntermediateDirectories: true)
+
+        let scanned = PhotoViewerViewModel.scanImagesInDirectory(tempDir)
+        XCTAssertEqual(scanned.map(\.lastPathComponent), [validImg.lastPathComponent])
+    }
+
+    func testYandexJPEGConversionCompositesTransparencyOverWhiteNotBlack() throws {
+        let transparentURL = try createTestPNG(
+            named: "transparent.png",
+            width: 100,
+            height: 100,
+            fillColor: NSColor(deviceRed: 0.0, green: 0.0, blue: 0.0, alpha: 0.0)
+        )
+        let vm = PhotoViewerViewModel()
+        vm.open(urls: [transparentURL])
+        vm.loadCurrentImageSynchronously()
+
+        guard let cg = vm.currentCGImage,
+              let jpegData = YandexImageSearch.prepareJPEGData(from: cg),
+              let rep = NSBitmapImageRep(data: jpegData),
+              let pixel = rep.colorAt(x: 50, y: 50)?.usingColorSpace(.sRGB) else {
+            XCTFail("Expected valid JPEG rep")
+            return
+        }
+        XCTAssertGreaterThan(pixel.redComponent, 0.95)
+        XCTAssertGreaterThan(pixel.greenComponent, 0.95)
+        XCTAssertGreaterThan(pixel.blueComponent, 0.95)
+    }
+
+    func testTrashingCroppedFileClearsStaleUndoEntry() throws {
+        let imgURL = try createTestPNG(named: "orig.png", width: 200, height: 200)
+        let vm = PhotoViewerViewModel()
+        vm.open(urls: [imgURL])
+        vm.loadCurrentImageSynchronously()
+
+        vm.normalizedSelectionRect = CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.5)
+        vm.cropToSelection()
+        XCTAssertTrue(vm.canUndoEdit)
+        XCTAssertEqual(vm.currentURL?.lastPathComponent, "orig_cropped.png")
+
+        vm.moveCurrentImageToTrash()
+        XCTAssertFalse(vm.canUndoEdit)
+    }
 }

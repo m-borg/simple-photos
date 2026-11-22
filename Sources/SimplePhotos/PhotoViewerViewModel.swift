@@ -80,6 +80,7 @@ public final class PhotoViewerViewModel: ObservableObject {
     @Published public private(set) var isDefaultImageViewer: Bool = false
     @Published public private(set) var isUpdatingDefaultViewer: Bool = false
     @Published public private(set) var isSearchingYandex: Bool = false
+    @Published public private(set) var isRemovingBackground: Bool = false
     @Published public private(set) var detectedBackgroundColor: NSColor?
     @Published public var autoBackgroundColorEnabled: Bool = {
         if let stored = UserDefaults.standard.object(forKey: "automaticBackgroundEnabled_v2") as? Bool {
@@ -219,7 +220,7 @@ public final class PhotoViewerViewModel: ObservableObject {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(
             at: directoryURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isHiddenKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isHiddenKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             return []
@@ -227,9 +228,13 @@ public final class PhotoViewerViewModel: ObservableObject {
 
         let filtered = contents.filter { url in
             guard isSupportedImageFile(url) else { return false }
-            if let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-               values.isRegularFile == true {
-                return true
+            if let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey]) {
+                if values.isDirectory == true {
+                    return false
+                }
+                if let isRegular = values.isRegularFile {
+                    return isRegular
+                }
             }
             return true
         }
@@ -370,7 +375,7 @@ public final class PhotoViewerViewModel: ObservableObject {
         currentIndex = clampedIndex
         let url = imageURLs[clampedIndex]
 
-        // Reset zoom, pan & selection on image change, restore any session rotation for this URL
+        // Reset zoom, pan, rename & selection on image change, restore any session rotation for this URL
         zoomScale = 1.0
         panOffset = .zero
         isFlippedHorizontally = false
@@ -499,8 +504,10 @@ public final class PhotoViewerViewModel: ObservableObject {
 
         if let source = CGImageSourceCreateWithURL(url as CFURL, nil) {
             let count = CGImageSourceGetCount(source)
+            let ext = url.pathExtension.lowercased()
+            let supportsAnimation = ["gif", "webp", "png", "apng"].contains(ext)
 
-            if count > 1 {
+            if count > 1 && supportsAnimation && isAnimatedImageSource(source) {
                 for i in 0..<count {
                     if let frameCG = CGImageSourceCreateImageAtIndex(source, i, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
                         let duration = frameDuration(at: i, source: source)
@@ -508,10 +515,24 @@ public final class PhotoViewerViewModel: ObservableObject {
                     }
                 }
                 decodedCG = animatedFrames.first?.cgImage
+            } else if count > 1 && (ext == "icns" || ext == "ico") {
+                // For multi-size icon containers, pick the highest-resolution representation
+                var bestCG: CGImage?
+                var bestArea = 0
+                for i in 0..<count {
+                    if let candidate = CGImageSourceCreateImageAtIndex(source, i, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) {
+                        let area = candidate.width * candidate.height
+                        if area > bestArea {
+                            bestArea = area
+                            bestCG = candidate
+                        }
+                    }
+                }
+                decodedCG = bestCG
             }
 
             if decodedCG == nil && count >= 1 {
-                var maxDim = 4096
+                var maxDim: Int? = nil
                 if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
                     let w = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
                     let h = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
@@ -519,12 +540,14 @@ public final class PhotoViewerViewModel: ObservableObject {
                         maxDim = max(w, h)
                     }
                 }
-                let thumbOpts: [CFString: Any] = [
+                var thumbOpts: [CFString: Any] = [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxDim
+                    kCGImageSourceShouldCacheImmediately: true
                 ]
+                if let maxDim {
+                    thumbOpts[kCGImageSourceThumbnailMaxPixelSize] = maxDim
+                }
                 decodedCG = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary)
                     ?? CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
             }
@@ -663,6 +686,15 @@ public final class PhotoViewerViewModel: ObservableObject {
         let finalB = CGFloat(winningExactKey & 0xFF) / 255.0
 
         return NSColor(srgbRed: finalR, green: finalG, blue: finalB, alpha: 1.0)
+    }
+
+    nonisolated private static func isAnimatedImageSource(_ source: CGImageSource) -> Bool {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return false
+        }
+        return props[kCGImagePropertyGIFDictionary] != nil
+            || props[kCGImagePropertyWebPDictionary] != nil
+            || props[kCGImagePropertyPNGDictionary] != nil
     }
 
     /// Supports animated GIF, animated WebP, and APNG frame delays.
@@ -872,6 +904,8 @@ public final class PhotoViewerViewModel: ObservableObject {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
             photoCache.removeObject(forKey: url as NSURL)
             sessionRotations.removeValue(forKey: url)
+            createdCropURLsStack.removeAll { $0.createdURL.path == url.standardizedFileURL.path }
+            canUndoEdit = !createdCropURLsStack.isEmpty
             imageURLs.remove(at: currentIndex)
 
             if !isFullScreen {
@@ -898,6 +932,61 @@ public final class PhotoViewerViewModel: ObservableObject {
     public func revealInFinder() {
         guard let url = currentURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// Sets the current photo (or active selection/rotated view) as the macOS Desktop Wallpaper across all screens.
+    public func setCurrentImageAsWallpaper() {
+        guard let originalURL = currentURL else { return }
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return }
+
+        var targetURL = originalURL
+        let needsRenderedFile = rotationDegrees != 0
+            || isFlippedHorizontally
+            || hasActiveSelection
+            || originalURL.pathExtension.lowercased() == "webp"
+
+        if needsRenderedFile, let cgImage = currentCGImage {
+            let oriented = Self.createOrientedCGImage(
+                from: cgImage,
+                rotationDegrees: rotationDegrees,
+                isFlippedHorizontally: isFlippedHorizontally
+            )
+            let finalCG: CGImage
+            if hasActiveSelection,
+               let pixelRect = selectedPixelRect(for: oriented),
+               let cropped = Self.renderStandaloneCroppedCGImage(from: oriented, pixelRect: pixelRect) {
+                finalCG = cropped
+            } else {
+                finalCG = oriented
+            }
+
+            if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let dir = appSupport.appendingPathComponent("SimplePhotos", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let wallpaperFile = dir.appendingPathComponent("wallpaper-\(Int(Date().timeIntervalSince1970)).png")
+                if let dest = CGImageDestinationCreateWithURL(wallpaperFile as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                    CGImageDestinationAddImage(dest, finalCG, nil)
+                    if CGImageDestinationFinalize(dest) {
+                        targetURL = wallpaperFile
+                    }
+                }
+            }
+        }
+
+        let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+            .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+            .allowClipping: true
+        ]
+
+        var succeeded = false
+        for screen in screens {
+            if (try? NSWorkspace.shared.setDesktopImageURL(targetURL, for: screen, options: options)) != nil {
+                succeeded = true
+            }
+        }
+
+        showToast(succeeded ? "Set as Wallpaper" : "Could not set Wallpaper")
     }
 
     // MARK: - Inline Filename Renaming
@@ -962,6 +1051,12 @@ public final class PhotoViewerViewModel: ObservableObject {
             if let rot = sessionRotations.removeValue(forKey: oldURL) {
                 sessionRotations[newURL] = rot
             }
+            let oldPath = oldURL.standardizedFileURL.path
+            createdCropURLsStack = createdCropURLsStack.map { entry in
+                let newCreated = entry.createdURL.path == oldPath ? newURL : entry.createdURL
+                let newOrig = entry.originalURL.path == oldPath ? newURL : entry.originalURL
+                return (createdURL: newCreated, originalURL: newOrig)
+            }
 
             imageURLs[currentIndex] = newURL
             metadata.filename = newURL.lastPathComponent
@@ -977,13 +1072,14 @@ public final class PhotoViewerViewModel: ObservableObject {
     }
 
     public func copyImageToClipboard() {
-        if let cgImage = currentCGImage, normalizedSelectionRect != nil {
+        if let cgImage = currentCGImage {
             let oriented = Self.createOrientedCGImage(
                 from: cgImage,
                 rotationDegrees: rotationDegrees,
                 isFlippedHorizontally: isFlippedHorizontally
             )
-            if let pixelRect = selectedPixelRect(for: oriented),
+            if normalizedSelectionRect != nil,
+               let pixelRect = selectedPixelRect(for: oriented),
                let croppedCG = Self.renderStandaloneCroppedCGImage(from: oriented, pixelRect: pixelRect) {
                 let nsImg = NSImage(cgImage: croppedCG, size: NSSize(width: croppedCG.width, height: croppedCG.height))
                 let pb = NSPasteboard.general
@@ -991,6 +1087,16 @@ public final class PhotoViewerViewModel: ObservableObject {
                 pb.writeObjects([nsImg])
                 clearSelection()
                 showToast("Copied selection")
+                return
+            }
+            if rotationDegrees != 0 || isFlippedHorizontally {
+                let nsImg = NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.writeObjects([nsImg])
+                if !isFullScreen {
+                    showToast("Copied image")
+                }
                 return
             }
         }
@@ -1070,15 +1176,20 @@ public final class PhotoViewerViewModel: ObservableObject {
         }
         let w = subImage.width
         let h = subImage.height
+        let targetCS: CGColorSpace
+        if let srcCS = subImage.colorSpace, srcCS.model == .rgb {
+            targetCS = srcCS
+        } else {
+            targetCS = CGColorSpace(name: CGColorSpace.sRGB)!
+        }
         guard w >= 1, h >= 1,
-              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(
                   data: nil,
                   width: w,
                   height: h,
                   bitsPerComponent: 8,
                   bytesPerRow: w * 4,
-                  space: colorSpace,
+                  space: targetCS,
                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
               ) else {
             return subImage
@@ -1135,6 +1246,79 @@ public final class PhotoViewerViewModel: ObservableObject {
         showToast("Saved “\(newURL.lastPathComponent)”")
     }
 
+    /// Uses macOS native Vision subject lifting (Quick Actions -> Remove Background) and saves the result
+    /// as a brand-new transparent PNG file (`<name>_nobg.png`) alongside the untouched original.
+    public func removeBackgroundFromCurrentImage() {
+        guard let originalURL = currentURL,
+              let cgImage = currentCGImage,
+              !isRemovingBackground else {
+            return
+        }
+
+        let oriented = Self.createOrientedCGImage(
+            from: cgImage,
+            rotationDegrees: rotationDegrees,
+            isFlippedHorizontally: isFlippedHorizontally
+        )
+
+        isRemovingBackground = true
+        showToast("Removing background…")
+
+        Task {
+            do {
+                let cutoutCG = try await Task.detached(priority: .userInitiated) {
+                    try BackgroundRemover.removeBackground(from: oriented)
+                }.value
+
+                self.isRemovingBackground = false
+
+                guard let newURL = self.saveAsNewImageFile(
+                    cutoutCG,
+                    basedOn: originalURL,
+                    suffix: "nobg",
+                    forcePNG: true
+                ) else {
+                    self.showToast("Could not save background-removed image")
+                    return
+                }
+
+                self.createdCropURLsStack.append((createdURL: newURL, originalURL: originalURL))
+                self.canUndoEdit = true
+
+                let stayedOnSamePhoto = (self.currentURL?.standardizedFileURL.path == originalURL.standardizedFileURL.path)
+                if stayedOnSamePhoto {
+                    self.normalizedSelectionRect = nil
+                    self.isCropToolActive = false
+                }
+
+                let currentlyViewedURL = self.currentURL
+                let parentDir = newURL.deletingLastPathComponent()
+                let updatedSiblings = Self.scanImagesInDirectory(parentDir).map { $0.standardizedFileURL }
+                if !updatedSiblings.isEmpty {
+                    self.imageURLs = updatedSiblings
+                } else {
+                    self.imageURLs.insert(newURL, at: min(self.currentIndex + 1, self.imageURLs.count))
+                }
+
+                if stayedOnSamePhoto {
+                    if let newIdx = self.imageURLs.firstIndex(where: { $0.path == newURL.path }) {
+                        self.selectImage(at: newIdx, forceReload: true)
+                    } else {
+                        self.loadCurrentImageSynchronously()
+                    }
+                } else if let viewed = currentlyViewedURL,
+                          let updatedIdx = self.imageURLs.firstIndex(where: { $0.path == viewed.path }) {
+                    self.currentIndex = updatedIdx
+                }
+
+                self.showToast("Saved “\(newURL.lastPathComponent)”")
+            } catch {
+                self.isRemovingBackground = false
+                self.showToast(error.localizedDescription)
+            }
+        }
+    }
+
     public func undoLastEdit() {
         guard let lastEntry = createdCropURLsStack.popLast() else {
             return
@@ -1161,35 +1345,45 @@ public final class PhotoViewerViewModel: ObservableObject {
             selectImage(at: min(currentIndex, imageURLs.count - 1), forceReload: true)
         }
 
-        showToast("Undid crop (removed “\(createdURL.lastPathComponent)”)")
+        showToast("Undid (removed “\(createdURL.lastPathComponent)”)")
     }
 
     /// Writes `newCGImage` to a brand-new unique file alongside `originalURL`, leaving `originalURL` untouched.
-    private func saveAsNewImageFile(_ newCGImage: CGImage, basedOn originalURL: URL, suffix: String) -> URL? {
+    private func saveAsNewImageFile(
+        _ newCGImage: CGImage,
+        basedOn originalURL: URL,
+        suffix: String,
+        forcePNG: Bool = false
+    ) -> URL? {
         let origExt = originalURL.pathExtension.lowercased()
         let targetExt: String
         let utTypeIdentifier: CFString
 
-        switch origExt {
-        case "jpg", "jpeg", "jpe":
-            targetExt = origExt
-            utTypeIdentifier = UTType.jpeg.identifier as CFString
-        case "png":
+        if forcePNG {
             targetExt = "png"
             utTypeIdentifier = UTType.png.identifier as CFString
-        case "heic", "heif":
-            targetExt = origExt
-            utTypeIdentifier = UTType.heic.identifier as CFString
-        case "tiff", "tif":
-            targetExt = origExt
-            utTypeIdentifier = UTType.tiff.identifier as CFString
-        case "bmp":
-            targetExt = "bmp"
-            utTypeIdentifier = UTType.bmp.identifier as CFString
-        default:
-            // Formats like WebP that macOS CGImageDestination doesn't write natively are saved cleanly as .png
-            targetExt = "png"
-            utTypeIdentifier = UTType.png.identifier as CFString
+        } else {
+            switch origExt {
+            case "jpg", "jpeg", "jpe":
+                targetExt = origExt
+                utTypeIdentifier = UTType.jpeg.identifier as CFString
+            case "png":
+                targetExt = "png"
+                utTypeIdentifier = UTType.png.identifier as CFString
+            case "heic", "heif":
+                targetExt = origExt
+                utTypeIdentifier = UTType.heic.identifier as CFString
+            case "tiff", "tif":
+                targetExt = origExt
+                utTypeIdentifier = UTType.tiff.identifier as CFString
+            case "bmp":
+                targetExt = "bmp"
+                utTypeIdentifier = UTType.bmp.identifier as CFString
+            default:
+                // Formats like WebP that macOS CGImageDestination doesn't write natively are saved cleanly as .png
+                targetExt = "png"
+                utTypeIdentifier = UTType.png.identifier as CFString
+            }
         }
 
         let parentDir = originalURL.deletingLastPathComponent()
@@ -1273,12 +1467,27 @@ public final class PhotoViewerViewModel: ObservableObject {
 
     public func searchCurrentImageInYandex() {
         guard let cgImage = currentCGImage, !isSearchingYandex else { return }
+
+        let oriented = Self.createOrientedCGImage(
+            from: cgImage,
+            rotationDegrees: rotationDegrees,
+            isFlippedHorizontally: isFlippedHorizontally
+        )
+        let targetCG: CGImage
+        if hasActiveSelection,
+           let pixelRect = selectedPixelRect(for: oriented),
+           let cropped = Self.renderStandaloneCroppedCGImage(from: oriented, pixelRect: pixelRect) {
+            targetCG = cropped
+        } else {
+            targetCG = oriented
+        }
+
         isSearchingYandex = true
         showToast("Searching image in Yandex…")
 
         Task {
             do {
-                let searchURL = try await YandexImageSearch.searchImage(cgImage: cgImage)
+                let searchURL = try await YandexImageSearch.searchImage(cgImage: targetCG)
                 self.isSearchingYandex = false
                 NSWorkspace.shared.open(searchURL)
             } catch {

@@ -7,21 +7,29 @@ import UniformTypeIdentifiers
 public struct InteractiveImageCanvas: NSViewRepresentable {
     @ObservedObject var viewModel: PhotoViewerViewModel
     var onUserActivity: () -> Void
+    var onDropTargetChanged: ((Bool) -> Void)?
 
-    public init(viewModel: PhotoViewerViewModel, onUserActivity: @escaping () -> Void) {
+    public init(
+        viewModel: PhotoViewerViewModel,
+        onUserActivity: @escaping () -> Void,
+        onDropTargetChanged: ((Bool) -> Void)? = nil
+    ) {
         self.viewModel = viewModel
         self.onUserActivity = onUserActivity
+        self.onDropTargetChanged = onDropTargetChanged
     }
 
     public func makeNSView(context: Context) -> InteractiveCanvasNSView {
         let view = InteractiveCanvasNSView()
         view.onUserActivity = onUserActivity
+        view.onDropTargetChanged = onDropTargetChanged
         view.bind(to: viewModel)
         return view
     }
 
     public func updateNSView(_ nsView: InteractiveCanvasNSView, context: Context) {
         nsView.onUserActivity = onUserActivity
+        nsView.onDropTargetChanged = onDropTargetChanged
         nsView.bind(to: viewModel)
         nsView.needsDisplay = true
     }
@@ -64,6 +72,7 @@ public final class InteractiveCanvasNSView: NSView {
 
     weak var viewModel: PhotoViewerViewModel?
     var onUserActivity: (() -> Void)?
+    var onDropTargetChanged: ((Bool) -> Void)?
 
     private var cancellable: AnyCancellable?
     private var lastDragLocation: NSPoint?
@@ -1221,8 +1230,13 @@ public final class InteractiveCanvasNSView: NSView {
             menu.addItem(startCrop)
         }
 
+        let removeBgItem = NSMenuItem(title: "Remove Background", action: #selector(ctxRemoveBackground), keyEquivalent: "K")
+        removeBgItem.keyEquivalentModifierMask = [.command, .shift]
+        removeBgItem.target = self
+        menu.addItem(removeBgItem)
+
         if vm.canUndoEdit {
-            let undoItem = NSMenuItem(title: "Undo Crop", action: #selector(ctxUndoEdit), keyEquivalent: "z")
+            let undoItem = NSMenuItem(title: "Undo", action: #selector(ctxUndoEdit), keyEquivalent: "z")
             undoItem.target = self
             menu.addItem(undoItem)
             menu.addItem(.separator())
@@ -1289,6 +1303,10 @@ public final class InteractiveCanvasNSView: NSView {
         reveal.target = self
         menu.addItem(reveal)
 
+        let wallpaper = NSMenuItem(title: "Set as Wallpaper", action: #selector(ctxSetWallpaper), keyEquivalent: "")
+        wallpaper.target = self
+        menu.addItem(wallpaper)
+
         menu.addItem(.separator())
 
         let setDefItem = NSMenuItem(
@@ -1320,6 +1338,7 @@ public final class InteractiveCanvasNSView: NSView {
     @objc private func ctxOpen() { viewModel?.presentOpenPanel() }
     @objc private func ctxToggleCropMode() { viewModel?.toggleCropMode() }
     @objc private func ctxCropToSelection() { viewModel?.cropToSelection() }
+    @objc private func ctxRemoveBackground() { viewModel?.removeBackgroundFromCurrentImage() }
     @objc private func ctxClearSelection() { viewModel?.clearSelection() }
     @objc private func ctxUndoEdit() { viewModel?.undoLastEdit() }
     @objc private func ctxFullScreen() { viewModel?.toggleFullScreen() }
@@ -1333,6 +1352,7 @@ public final class InteractiveCanvasNSView: NSView {
     @objc private func ctxCopyImage() { viewModel?.copyImageToClipboard() }
     @objc private func ctxCopyPath() { viewModel?.copyFilePathToClipboard() }
     @objc private func ctxReveal() { viewModel?.revealInFinder() }
+    @objc private func ctxSetWallpaper() { viewModel?.setCurrentImageAsWallpaper() }
     @objc private func ctxSetDefaultViewer() { viewModel?.setAsDefaultForAllImages() }
     @objc private func ctxRestorePreviewViewer() { viewModel?.restorePreviewAsDefaultForAllImages() }
     @objc private func ctxTrash() { viewModel?.moveCurrentImageToTrash() }
@@ -1340,10 +1360,20 @@ public final class InteractiveCanvasNSView: NSView {
     // MARK: - Drag and Drop
 
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onDropTargetChanged?(true)
         return .copy
     }
 
+    override public func draggingExited(_ sender: NSDraggingInfo?) {
+        onDropTargetChanged?(false)
+    }
+
+    override public func draggingEnded(_ sender: NSDraggingInfo) {
+        onDropTargetChanged?(false)
+    }
+
     override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onDropTargetChanged?(false)
         let pasteboard = sender.draggingPasteboard
         guard let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [
             .urlReadingFileURLsOnly: true

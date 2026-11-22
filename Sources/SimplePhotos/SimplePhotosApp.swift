@@ -77,10 +77,44 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         window.setFrameAutosaveName("SimplePhotosSingleWindow")
 
         self.mainWindow = window
+        applyTrafficLightSizing(to: window)
         return window
     }
 
-    // MARK: - NSWindowDelegate (Fullscreen State)
+    /// Centers the native unscaled macOS Liquid Glass traffic light buttons (14×14pt)
+    /// vertically inside our 42pt top bar without distorting their native rendering.
+    public func applyTrafficLightSizing(to window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        let nativeSize = NSSize(width: 14.0, height: 14.0)
+        // Center vertically in our 42pt top bar (titlebarView is 32pt tall at top of window, unflipped)
+        let y: CGFloat = 4.0
+        let positions: [(NSWindow.ButtonType, CGFloat)] = [
+            (.closeButton, 14.0),
+            (.miniaturizeButton, 37.0),
+            (.zoomButton, 60.0)
+        ]
+
+        for (btnType, x) in positions {
+            guard let btn = window.standardWindowButton(btnType) else { continue }
+            btn.setFrameSize(nativeSize)
+            btn.setBoundsSize(nativeSize)
+            btn.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+    }
+
+    // MARK: - NSWindowDelegate (Fullscreen & Resize)
+
+    public func windowDidResize(_ notification: Notification) {
+        if let win = notification.object as? NSWindow {
+            applyTrafficLightSizing(to: win)
+        }
+    }
+
+    public func windowDidBecomeKey(_ notification: Notification) {
+        if let win = notification.object as? NSWindow {
+            applyTrafficLightSizing(to: win)
+        }
+    }
 
     public func windowWillEnterFullScreen(_ notification: Notification) {
         viewModel.showMetadataPopover = false
@@ -98,6 +132,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     public func windowDidExitFullScreen(_ notification: Notification) {
         viewModel.isFullScreen = false
+        if let win = notification.object as? NSWindow {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyTrafficLightSizing(to: win)
+            }
+        }
     }
 
     // MARK: - CLI Arguments
@@ -195,6 +234,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         cropItem.target = self
         editMenu.addItem(cropItem)
 
+        let removeBgItem = NSMenuItem(title: "Remove Background", action: #selector(menuRemoveBackground), keyEquivalent: "K")
+        removeBgItem.keyEquivalentModifierMask = [.command, .shift]
+        removeBgItem.target = self
+        editMenu.addItem(removeBgItem)
+
         let copyImgItem = NSMenuItem(title: "Copy Image / Selection", action: #selector(menuCopyImage), keyEquivalent: "c")
         copyImgItem.target = self
         editMenu.addItem(copyImgItem)
@@ -272,6 +316,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
         yandexItem.target = self
         imgMenu.addItem(yandexItem)
 
+        let wallpaperItem = NSMenuItem(title: "Set as Wallpaper", action: #selector(menuSetWallpaper), keyEquivalent: "")
+        wallpaperItem.target = self
+        imgMenu.addItem(wallpaperItem)
+
         imgMenu.addItem(.separator())
 
         let fullScreenItem = NSMenuItem(title: "Toggle Fullscreen", action: #selector(menuToggleFullscreen), keyEquivalent: "f")
@@ -288,6 +336,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func menuMoveToTrash() { viewModel.moveCurrentImageToTrash() }
     @objc private func menuUndoEdit() { viewModel.undoLastEdit() }
     @objc private func menuCropSelection() { viewModel.toggleCropMode() }
+    @objc private func menuRemoveBackground() { viewModel.removeBackgroundFromCurrentImage() }
     @objc private func menuCopyImage() { viewModel.copyImageToClipboard() }
     @objc private func menuCopyPath() { viewModel.copyFilePathToClipboard() }
     @objc private func menuPrevPhoto() { viewModel.previousImage() }
@@ -302,6 +351,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
     @objc private func menuFlipHorizontal() { viewModel.toggleFlipHorizontal() }
     @objc private func menuToggleAutoBackground() { viewModel.toggleAutoBackgroundColor() }
     @objc private func menuSearchYandex() { viewModel.searchCurrentImageInYandex() }
+    @objc private func menuSetWallpaper() { viewModel.setCurrentImageAsWallpaper() }
     @objc private func menuSetDefaultViewer() { viewModel.setAsDefaultForAllImages() }
     @objc private func menuRestorePreviewViewer() { viewModel.restorePreviewAsDefaultForAllImages() }
     @objc private func menuToggleFullscreen() { viewModel.toggleFullScreen() }
@@ -349,13 +399,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
 
     private func handleExtremeEdgeMouseDown(_ event: NSEvent) -> Bool {
         // If user is currently editing the filename in the top bar and clicks anywhere outside it,
-        // immediately resign first responder so the rename commits and saves on click-away!
+        // immediately resign first responder so the rename commits and saves on click-away,
+        // without accidentally navigating away on that same click.
         if let window = mainWindow,
            let editorView = window.firstResponder as? NSTextView,
            let field = (editorView.superview?.superview as? FilenameNSTextField) ?? (editorView.superview as? FilenameNSTextField) {
             let ptInField = field.convert(event.locationInWindow, from: nil)
             if !field.actualTextRect().contains(ptInField) {
                 window.makeFirstResponder(nil)
+                return false
             }
         }
 
@@ -449,7 +501,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegat
                 }
             case "k":
                 if viewModel.hasImages {
-                    viewModel.toggleCropMode()
+                    if isShift {
+                        viewModel.removeBackgroundFromCurrentImage()
+                    } else {
+                        viewModel.toggleCropMode()
+                    }
                     return true
                 }
             case "c":

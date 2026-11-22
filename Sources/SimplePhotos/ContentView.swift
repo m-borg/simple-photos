@@ -31,7 +31,10 @@ public struct ContentView: View {
                     if viewModel.hasImages {
                         InteractiveImageCanvas(
                             viewModel: viewModel,
-                            onUserActivity: {}
+                            onUserActivity: {},
+                            onDropTargetChanged: { targeted in
+                                isDropTargeted = targeted
+                            }
                         )
                     } else {
                         emptyWelcomeState
@@ -116,9 +119,9 @@ public struct ContentView: View {
             }
 
             HStack(spacing: 4) {
-                // Space for macOS close/minimize/zoom window buttons
+                // Space for macOS Liquid Glass close/minimize/zoom window buttons
                 Spacer()
-                    .frame(width: 72)
+                    .frame(width: 80)
 
                 if viewModel.hasImages {
                     // Crop Icon (or drag directly on image; action buttons appear right below selection)
@@ -130,10 +133,20 @@ public struct ContentView: View {
                         viewModel.toggleCropMode()
                     }
 
+                    // Native macOS Remove Background (Quick Actions -> Remove Background)
+                    WinBarIconButton(
+                        systemName: "person.and.background.dotted",
+                        isActive: viewModel.isRemovingBackground,
+                        isDisabled: viewModel.isRemovingBackground,
+                        help: "Remove Background (Creates new PNG)"
+                    ) {
+                        viewModel.removeBackgroundFromCurrentImage()
+                    }
+
                     if viewModel.canUndoEdit {
                         WinBarIconButton(
                             systemName: "arrow.uturn.backward",
-                            help: "Undo Crop"
+                            help: "Undo"
                         ) {
                             viewModel.undoLastEdit()
                         }
@@ -350,10 +363,10 @@ public struct ContentView: View {
 
                     Slider(
                         value: Binding(
-                            get: { min(max(Double(viewModel.zoomScale), 0.25), 4.0) },
+                            get: { min(max(Double(viewModel.zoomScale), 0.25), 10.0) },
                             set: { viewModel.setZoom(CGFloat($0)) }
                         ),
-                        in: 0.25...4.0
+                        in: 0.25...10.0
                     )
                     .controlSize(.mini)
                     .frame(width: 88)
@@ -697,13 +710,23 @@ public struct ContentView: View {
             let item = ActionMenuItem(title: "\(pct)%") { [weak viewModel] in
                 viewModel?.setDisplayZoomPercentage(pct)
             }
-            if viewModel.displayZoomPercentageText == "\(pct)%" && abs(viewModel.zoomScale - 1.0) >= 0.01 {
+            if viewModel.displayZoomPercentageText == "\(pct)%" {
                 item.state = .on
             }
             menu.addItem(item)
         }
 
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        // Open upward above the bottom bar so the menu is never clipped at the bottom of the window/screen
+        let mouseLoc = NSEvent.mouseLocation
+        let menuHeight = menu.size.height
+        let baseBottomY: CGFloat
+        if let win = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first {
+            baseBottomY = win.frame.minY + 36
+        } else {
+            baseBottomY = mouseLoc.y + 14
+        }
+        let popPoint = NSPoint(x: mouseLoc.x - 24, y: baseBottomY + menuHeight)
+        menu.popUp(positioning: nil, at: popPoint, in: nil)
     }
 
     // MARK: - SwiftUI Drop Fallback
@@ -937,6 +960,13 @@ private struct PlainFilenameTextField: NSViewRepresentable {
 
     func updateNSView(_ nsView: FilenameNSTextField, context: Context) {
         context.coordinator.parent = self
+        if !isEditing && nsView.currentEditor() != nil {
+            context.coordinator.didCancel = true
+            nsView.abortEditing()
+            nsView.refusesFirstResponder = true
+            nsView.stringValue = filename
+            return
+        }
         if nsView.currentEditor() == nil {
             if nsView.stringValue != filename {
                 nsView.stringValue = filename

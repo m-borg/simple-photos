@@ -59,6 +59,9 @@ public enum YandexImageSearch {
         let cg = nsCtx.cgContext
 
         let rect = CGRect(x: 0, y: 0, width: CGFloat(targetW), height: CGFloat(targetH))
+        // Fill white behind transparent images so JPEG conversion doesn't turn alpha into solid black
+        cg.setFillColor(CGColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0))
+        cg.fill(rect)
         cg.interpolationQuality = .high
         cg.draw(cgImage, in: rect)
 
